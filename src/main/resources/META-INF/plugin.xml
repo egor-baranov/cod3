@@ -1,15 +1,54 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
     <id>com.github.egorbaranov.cod3</id>
-    <name>cod3</name>
+    <name>Cod3</name>
     <vendor>egor-baranov</vendor>
 
     <depends>com.intellij.modules.platform</depends>
 
     <resource-bundle>messages.MyBundle</resource-bundle>
 
+    <actions>
+        <!-- Define a group (not popup, since floating toolbar is a strip, not a context menu) -->
+        <group
+                id="Cod3"
+                popup="true"
+                text="Cod3 Plugin"
+                icon="/icons/magic.svg">
+            <add-to-group group-id="Floating.CodeToolbar" anchor="first"/>
+        </group>
+
+        <!-- 2) Actually register the ShowSelectionAction so IDE knows about it -->
+        <action
+                id="com.github.egorbaranov.cod3.actions.EditAction"
+                class="com.github.egorbaranov.cod3.actions.EditAction"
+                text="Edit"
+        >
+            <add-to-group group-id="Floating.CodeToolbar" anchor="first"/>
+        </action>
+
+        <action
+                id="com.github.egorbaranov.cod3.actions.AddToChatAction"
+                class="com.github.egorbaranov.cod3.actions.AddToChatAction"
+                text="Edit"
+        >
+            <add-to-group group-id="Floating.CodeToolbar"
+                          anchor="after"
+                          relative-to-action="com.github.egorbaranov.cod3.actions.EditAction"
+            />
+        </action>
+    </actions>
+
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.egorbaranov.cod3.toolWindow.MyToolWindowFactory" id="MyToolWindow"/>
-        <postStartupActivity implementation="com.github.egorbaranov.cod3.startup.MyProjectActivity" />
+        <applicationConfigurable
+                id="ai.code.inspection.settings"
+                instance="com.github.egorbaranov.cod3.settings.PluginConfigurable"
+                displayName="Cod3 Plugin"/>
+        <applicationService
+                serviceImplementation="com.github.egorbaranov.cod3.settings.PluginSettingsState"/>
+
+        <toolWindow factoryClass="com.github.egorbaranov.cod3.toolWindow.Cod3ToolWindowFactory" id="Cod3"/>
+        <postStartupActivity implementation="com.github.egorbaranov.cod3.startup.MyProjectActivity"/>
+        <editorFloatingToolbarProvider implementation="com.github.egorbaranov.cod3.actions.MyFloatingToolbarProvider"/>
     </extensions>
 </idea-plugin>
