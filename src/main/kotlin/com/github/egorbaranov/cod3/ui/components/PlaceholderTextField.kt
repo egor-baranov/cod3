@@ -16,7 +16,7 @@ class PlaceholderTextField(
 
     init {
         // Make sure we're using the normal text‐field font/style
-        font = UIUtil.getLabelFont()
+        font = UIUtil.getLabelFont().deriveFont(12f)
         // If you want the platform default, you can omit setting font here
     }
 
