@@ -3,10 +3,15 @@ package com.github.egorbaranov.cod3.toolWindow
 import com.github.egorbaranov.cod3.ui.components.RoundedTokenRenderer
 import com.github.egorbaranov.cod3.services.MyProjectService
 import com.github.egorbaranov.cod3.ui.Icons
+import com.github.egorbaranov.cod3.ui.components.RoundedBorder
+import com.github.egorbaranov.cod3.ui.components.RoundedTokenLabel
+import com.github.egorbaranov.cod3.ui.components.ScrollableSpacedPanel
+import com.github.egorbaranov.cod3.ui.components.TokenChip
 import com.github.egorbaranov.cod3.ui.components.createComboBox
 import com.github.egorbaranov.cod3.ui.components.createModelComboBox
 import com.github.egorbaranov.cod3.ui.createResizableEditor
 import com.intellij.icons.AllIcons
+import com.intellij.ide.actions.ShowSettingsUtilImpl
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.event.DocumentEvent
@@ -23,11 +28,15 @@ import com.intellij.ui.components.IconLabelButton
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
+import com.intellij.ui.dsl.builder.Align
 import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import scaledBy
 import java.awt.*
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
@@ -42,39 +51,87 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     override val icon: Icon? = AllIcons.Actions.EnableNewUi
     override fun shouldBeAvailable(project: Project): Boolean = true
     private var lookupPopup: JBPopup? = null
-    private lateinit var editorTextField: EditorTextField
     private val list = JBList(listOf("Files & Folders", "Code", "Docs", "Git", "Web", "Recent Changes"))
 
+    var chatIndex = 1
+
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        editorTextField = createResizableEditor(project)
         toolWindow.title = "Cod3"
 
-        // Title-bar actions
+        // Set up title-bar actions: "Add", "History", "Settings"
         val titleGroup = DefaultActionGroup().apply {
-            add(object : AnAction("Add", "Add a new item", AllIcons.General.Add) {
-                override fun actionPerformed(e: AnActionEvent) = println("Add clicked")
+            add(object : AnAction("Add", "Add a new chat tab", AllIcons.General.Add.scaledBy(0.8)) {
+                override fun actionPerformed(e: AnActionEvent) {
+                    addChatTab(project, toolWindow)
+                }
             })
-            add(object : AnAction("History", "Show history", AllIcons.Actions.ListFiles) {
-                override fun actionPerformed(e: AnActionEvent) = println("History clicked")
+
+            add(object : AnAction("History", "Show history", Icons.ChatList.scaledBy(1.15)) {
+                override fun actionPerformed(e: AnActionEvent) {
+                    addHistoryTab(project, toolWindow)
+                }
             })
-            add(object : AnAction("Settings", "Open settings", AllIcons.General.Settings) {
-                override fun actionPerformed(e: AnActionEvent) = println("Settings clicked")
+
+            add(object : AnAction("Settings", "Open settings", Icons.Settings.scaledBy(1.15)) {
+                override fun actionPerformed(e: AnActionEvent) {
+                    ShowSettingsUtilImpl.showSettingsDialog(project, "cod3.settings", "")
+                }
             })
         }
         (toolWindow as? ToolWindowEx)
             ?.setTitleActions(*titleGroup.getChildren(null))
 
-        val panel = SimpleToolWindowPanel(true, true).apply {
-            setContent(createChatPanel(project))
-        }
-
-        toolWindow.contentManager.addContent(
-            ContentFactory.getInstance()
-                .createContent(panel, null, false)
-        )
+        // Add an initial tab:
+        addChatTab(project, toolWindow)
     }
 
-    private fun createChatPanel(project: Project): JComponent {
+    private fun addChatTab(project: Project, toolWindow: ToolWindow) {
+        // Create fresh per-tab components:
+        val editorTextField: EditorTextField = createResizableEditor(project, minHeight = 64)
+        val contextReferencePanel = ScrollableSpacedPanel(4).apply {
+            isOpaque = false
+            alignmentY = Component.CENTER_ALIGNMENT
+        }
+
+        // Build the chat panel, passing these fresh components:
+        val panel = SimpleToolWindowPanel(true, true).apply {
+            setContent(createChatPanel(project, editorTextField, contextReferencePanel))
+        }
+
+        val content: Content = ContentFactory.getInstance()
+            .createContent(panel, "Chat ${chatIndex++}", /* isLockable= */ false)
+            .apply {
+                isCloseable = true
+                setShouldDisposeContent(true)
+            }
+
+        toolWindow.contentManager.addContent(content)
+        toolWindow.contentManager.setSelectedContent(content)
+    }
+
+    private fun addHistoryTab(project: Project, toolWindow: ToolWindow) {
+        // If history tab also needs its own editor etc, create fresh instances as needed.
+        val editorTextField: EditorTextField = createResizableEditor(project, minHeight = 64)
+        val contextReferencePanel = ScrollableSpacedPanel(4).apply {
+            isOpaque = false
+            alignmentY = Component.CENTER_ALIGNMENT
+        }
+        val panel = SimpleToolWindowPanel(true, true).apply {
+            setContent(createChatPanel(project, editorTextField, contextReferencePanel))
+        }
+        val content: Content = ContentFactory.getInstance()
+            .createContent(panel, "History", /* isLockable= */ false)
+            .apply {
+                isCloseable = true
+                setShouldDisposeContent(true)
+                icon = Icons.OpenAI
+            }
+        toolWindow.contentManager.addContent(content)
+        toolWindow.contentManager.setSelectedContent(content)
+    }
+
+
+    private fun createChatPanel(project: Project, editorTextField: EditorTextField, contextReferencePanel: JPanel): JComponent {
         val service = project.service<MyProjectService>()
 
         val messageContainer = JBPanel<JBPanel<*>>().apply {
@@ -93,7 +150,34 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                 editorTextField.text = ""
                 // simulate AI reply
                 val reply = service.getRandomNumber().toString()
-                appendAssistantBubble(messageContainer, "Cod3: $reply")
+                appendAssistantBubble(messageContainer, "class URLShortener(\n" +
+                        "    private val baseUrl: String,\n" +
+                        "    paths: MutableList<String>,\n" +
+                        "    val indexSelector: (List<String>) -> String\n" +
+                        ") {\n" +
+                        "\n" +
+                        "    private val paths = ArrayList(paths)2\n" +
+                        "    private val idToUrl = ConcurrentHashMap<String, String>()\n" +
+                        "    private val lock = ReentrantLock()\n" +
+                        "    fun short(url: String): String = lock.withLock {\n" +
+                        "        if (paths.isEmpty()) {\n" +
+                        "            throw IllegalStateException(\"Paths exceeded\")\n" +
+                        "        }\n" +
+                        "\n" +
+                        "        var randomElement: String\n" +
+                        "        do {\n" +
+                        "            randomElement = indexSelector(paths)\n" +
+                        "        } while (idToUrl.containsKey(randomElement))\n" +
+                        "\n" +
+                        "        paths.remove(randomElement)\n" +
+                        "        idToUrl[randomElement] = url\n" +
+                        "\n" +
+                        "        return baseUrl + randomElement\n" +
+                        "    }f\n" +
+                        "\n" +
+                        "    fun unshort(url: String): String? {\n" +
+                        "        if (!url.startsWith(baseUrl)) {\n" +
+                        "            throw IllegalArgumentException(\"Url format is wrong\")")
                 SwingUtilities.invokeLater {
                     scroll.verticalScrollBar.value = scroll.verticalScrollBar.maximum
                 }
@@ -110,7 +194,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                 if (event.oldLength > 0) {
                     removeTokenInlaysIfOverlapping(editorTextField, event.offset, event.oldLength)
                 }
-                checkPopup()
+                checkPopup(editorTextField, contextReferencePanel = contextReferencePanel)
             }
         })
 
@@ -157,7 +241,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }.apply {
             border = JBUI.Borders.empty(4)
 
-            val addContextButton = IconLabelButton(Icons.Mention, {checkPopup(true)}).apply {
+            val addContextButton = IconLabelButton(Icons.Mention, {checkPopup(editorTextField, contextReferencePanel, true)}).apply {
                 minimumSize = Dimension(24, 24)
                 preferredSize = Dimension(24, 24)
                 cursor = Cursor(Cursor.HAND_CURSOR)
@@ -165,7 +249,8 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
             val header = panel {
                 row {
-                    cell(addContextButton).align(AlignX.LEFT)
+                    cell(addContextButton).align(AlignX.LEFT).gap(RightGap.SMALL)
+                    cell(contextReferencePanel).align(Align.FILL)
                 }
             }.andTransparent().withBorder(JBUI.Borders.empty(0, 4))
 
@@ -191,7 +276,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
     }
 
-    private fun checkPopup(force: Boolean = false) {
+    private fun checkPopup(editorTextField: EditorTextField, contextReferencePanel: JPanel, force: Boolean = false) {
         println("check popup")
         val text = editorTextField.text
         val caret = editorTextField.caretModel.currentCaret.offset
@@ -199,13 +284,13 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         if (text.endsWith("@") || force) {
             val prefix = if (force) "" else text.substring(at, caret)
             println("show popup")
-            showOrUpdatePopup(prefix, at, force)
+            showOrUpdatePopup(editorTextField, contextReferencePanel, prefix, at, force)
         } else {
             lookupPopup?.cancel()
         }
     }
 
-    private fun showOrUpdatePopup(prefix: String, atPos: Int, force: Boolean = false) {
+    private fun showOrUpdatePopup(editorTextField: EditorTextField, contextReferencePanel: JPanel, prefix: String, atPos: Int, force: Boolean = false) {
         // Example list of component names:
         val allComponents = listOf(
             "JButton", "JLabel", "JPanel",
@@ -314,8 +399,16 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
             .setRequestFocus(true)
             .setItemChosenCallback(Runnable {
                 val sel = list.selectedValue ?: return@Runnable
-                replaceAt(editorTextField, "", atPos)
-                addRoundedToken(editorTextField, editorTextField.document.text.length - 1, "@${sel}")
+
+                if (force) {
+                    contextReferencePanel.add(RoundedTokenLabel("@$sel").apply {
+                        alignmentY = Component.CENTER_ALIGNMENT
+                    })
+                } else {
+                    replaceAt(editorTextField, "", atPos)
+                    addRoundedToken(editorTextField, editorTextField.document.text.length - 1, "@${sel}")
+                }
+
                 lookupPopup?.cancel()
             })
             .createPopup()
@@ -333,12 +426,12 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     }
 
     private fun appendAssistantBubble(container: JPanel, text: String) {
-        val bubble = createBubble(text, UIUtil.getPanelBackground())
+        val bubble = createBubble(text, UIUtil.getPanelBackground(), assistant = true)
         container.add(wrapHorizontal(bubble, Alignment.LEFT))
         refresh(container)
     }
 
-    private fun createBubble(text: String, bg: Color): JComponent {
+    private fun createBubble(text: String, bg: Color, assistant: Boolean = false): JComponent {
         val label = JLabel("<html>${text.replace("\n", "<br>")}</html>").apply {
             border = JBUI.Borders.empty(8, 12)
         }
@@ -347,6 +440,35 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                 isOpaque = false
                 background = bg
                 add(label, BorderLayout.CENTER)
+                if (assistant) add(
+                    JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
+                        border = JBUI.Borders.empty(4, 0)
+
+                        add(IconLabelButton(Icons.Like.scaledBy(1.1), {}).apply {
+                            minimumSize = Dimension(24, 24)
+                            preferredSize = Dimension(24, 24)
+                            cursor = Cursor(Cursor.HAND_CURSOR)
+                        })
+                        add(Box.createHorizontalStrut(4))
+                        add(IconLabelButton(Icons.Dislike.scaledBy(1.1), {}).apply {
+                            minimumSize = Dimension(24, 24)
+                            preferredSize = Dimension(24, 24)
+                            cursor = Cursor(Cursor.HAND_CURSOR)
+                        })
+                        add(Box.createHorizontalStrut(4))
+                        add(IconLabelButton(Icons.Clipboard.scaledBy(1.1), {}).apply {
+                            minimumSize = Dimension(24, 24)
+                            preferredSize = Dimension(24, 24)
+                            cursor = Cursor(Cursor.HAND_CURSOR)
+                        })
+                        add(Box.createHorizontalStrut(4))
+                        add(IconLabelButton(Icons.More.scaledBy(1.1), {}).apply {
+                            minimumSize = Dimension(24, 24)
+                            preferredSize = Dimension(24, 24)
+                            cursor = Cursor(Cursor.HAND_CURSOR)
+                        })
+                    }, BorderLayout.SOUTH
+                )
                 maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
             }
 
@@ -417,7 +539,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
     private fun replaceAt(field: EditorTextField, sel: String, atPos: Int) {
         val t = field.text
-        val c = field.caretModel.currentCaret.offset
+        val c = if (field.caretModel.allCarets.isEmpty()) 0 else field.caretModel.currentCaret.offset
         val before = t.substring(0, atPos)
         val after = t.substring(c)
         field.text = "$before$sel $after"

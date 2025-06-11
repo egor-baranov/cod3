@@ -41,13 +41,13 @@
 
     <extensions defaultExtensionNs="com.intellij">
         <applicationConfigurable
-                id="ai.code.inspection.settings"
+                id="cod3.settings"
                 instance="com.github.egorbaranov.cod3.settings.PluginConfigurable"
                 displayName="Cod3 Plugin"/>
         <applicationService
                 serviceImplementation="com.github.egorbaranov.cod3.settings.PluginSettingsState"/>
 
-        <toolWindow factoryClass="com.github.egorbaranov.cod3.toolWindow.Cod3ToolWindowFactory" id="Cod3"/>
+        <toolWindow factoryClass="com.github.egorbaranov.cod3.toolWindow.Cod3ToolWindowFactory" id="Cod3" canCloseContents="true"/>
         <postStartupActivity implementation="com.github.egorbaranov.cod3.startup.MyProjectActivity"/>
         <editorFloatingToolbarProvider implementation="com.github.egorbaranov.cod3.actions.MyFloatingToolbarProvider"/>
     </extensions>

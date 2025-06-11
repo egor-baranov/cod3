@@ -30,4 +30,14 @@ object Icons {
     val Sparkle: Icon = getIcon("/icons/sparkle.svg", Icons::class.java)
 
     val Ollama: Icon = getIcon("/icons/ollama.svg", Icons::class.java)
+
+    val ChatList: Icon = getIcon("/icons/reactions/chats.svg", Icons::class.java)
+    val Clipboard: Icon = getIcon("/icons/reactions/clipboard.svg", Icons::class.java)
+    val Dislike: Icon = getIcon("/icons/reactions/dislike.svg", Icons::class.java)
+    val DislikeFill: Icon = getIcon("/icons/reactions/dislike_fill.svg", Icons::class.java)
+    val Like: Icon = getIcon("/icons/reactions/like.svg", Icons::class.java)
+    val LikeFill: Icon = getIcon("/icons/reactions/like_fill.svg", Icons::class.java)
+    val More: Icon = getIcon("/icons/reactions/more.svg", Icons::class.java)
+    val NewChat: Icon = getIcon("/icons/reactions/new_chat.svg", Icons::class.java)
+    val Settings: Icon = getIcon("/icons/reactions/settings.svg", Icons::class.java)
 }

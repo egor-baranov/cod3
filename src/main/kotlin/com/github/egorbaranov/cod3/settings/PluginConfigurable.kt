@@ -26,7 +26,7 @@ class PluginConfigurable : SearchableConfigurable {
     private var indexingStepsDropdown = ComboBox(arrayOf(1, 2, 3))
 
 
-    override fun getId(): String = "my.plugin.settings"
+    override fun getId(): String = "cod3.settings"
 
     @NlsContexts.ConfigurableName
     override fun getDisplayName(): String = "My Plugin Settings"

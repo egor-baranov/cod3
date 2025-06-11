@@ -47,7 +47,7 @@ fun insertBlockInlayAboveSelection(editor: Editor, project: Project) {
     val editorComponent = editor.contentComponent
     val lineHeight = editor.lineHeight
 
-    val textField = createResizableEditor(project, 32, 0).apply {
+    val textField = createResizableEditor(project, 40, 0).apply {
         font = font.deriveFont(11f)
         minimumSize = Dimension()
     }
@@ -131,7 +131,7 @@ fun insertBlockInlayAboveSelection(editor: Editor, project: Project) {
     panel.add(textField, BorderLayout.CENTER)
 
     val actionPanel = JPanel(BorderLayout()).also { p ->
-        p.border = JBUI.Borders.empty(2, 2, 2, 2)
+        p.border = JBUI.Borders.empty(2)
 
         val comboBox = createModelComboBox().apply {
 //            preferredSize = JBUI.size(160, 20)  // smaller combo box width & height

@@ -51,7 +51,7 @@ class HintRenderer(private val text: String) : EditorCustomElementRenderer {
 
     override fun calcHeightInPixels(inlay: Inlay<*>): Int {
         val fontMetrics = inlay.editor.contentComponent.getFontMetrics(getFont())
-        return JBUI.scale(78)
+        return JBUI.scale(90)
     }
 
     override fun paint(

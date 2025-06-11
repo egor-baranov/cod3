@@ -7,6 +7,7 @@ import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.fileTypes.FileTypes
 import com.intellij.openapi.project.Project
 import com.intellij.ui.EditorTextField
+import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import java.awt.Dimension
 import java.awt.Graphics
@@ -28,10 +29,14 @@ fun createResizableEditor(
 ): EditorTextField {
     val editorField = object : EditorTextField("", project, FileTypes.PLAIN_TEXT) {
 
+        init {
+            this.isOpaque = false
+        }
+
         override fun paintComponent(g: Graphics) {
             val g2 = g.create() as Graphics2D
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-            g2.color = service<com.intellij.openapi.editor.colors.EditorColorsManager>().globalScheme.defaultBackground
+            g2.color = JBColor.gray.darker().darker().darker().darker()
             g2.fillRoundRect(0, 0, width, height, JBUI.scale(16), JBUI.scale(16))
             g2.dispose()
             super.paintComponent(g)
@@ -42,7 +47,7 @@ fun createResizableEditor(
             val g2 = g.create() as Graphics2D
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g2.color = service<com.intellij.openapi.editor.colors.EditorColorsManager>().globalScheme.defaultBackground
+                g2.color = JBColor.gray.darker().darker().darker().darker()
                 g2.drawRoundRect(
                     0,
                     0,
