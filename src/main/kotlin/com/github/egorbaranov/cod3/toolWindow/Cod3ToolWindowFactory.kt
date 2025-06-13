@@ -13,6 +13,7 @@ import com.github.egorbaranov.cod3.ui.createResizableEditor
 import com.intellij.icons.AllIcons
 import com.intellij.ide.actions.ShowSettingsUtilImpl
 import com.intellij.openapi.actionSystem.*
+import com.intellij.openapi.actionSystem.impl.ActionButton
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
@@ -117,17 +118,38 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
             alignmentY = Component.CENTER_ALIGNMENT
         }
         val panel = SimpleToolWindowPanel(true, true).apply {
-            setContent(createChatPanel(project, editorTextField, contextReferencePanel))
+            setContent(createHistoryPanel(project))
         }
         val content: Content = ContentFactory.getInstance()
             .createContent(panel, "History", /* isLockable= */ false)
             .apply {
                 isCloseable = true
                 setShouldDisposeContent(true)
-                icon = Icons.OpenAI
             }
         toolWindow.contentManager.addContent(content)
         toolWindow.contentManager.setSelectedContent(content)
+    }
+
+    private fun createHistoryPanel(project: Project): JPanel {
+        val messageContainer = JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = JBUI.Borders.empty(4)
+        }
+
+        val scroll = JBScrollPane(messageContainer).apply {
+            verticalScrollBar.unitIncrement = JBUI.scale(16)
+        }
+
+        for (i in 1..chatIndex) {
+            messageContainer.add(historyBubble("Chat $i"))
+            messageContainer.add(Box.createVerticalStrut(8))
+        }
+
+        refresh(messageContainer)
+        return JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.empty(8)
+            add(scroll, BorderLayout.CENTER)
+        }
     }
 
 
@@ -330,8 +352,8 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                         AllIcons.Actions.ShowCode,
                         AllIcons.FileTypes.Text,
                         AllIcons.Vcs.Branch,
-                        AllIcons.Nodes.WebFolder,
-                        AllIcons.General.Show
+                        Icons.Web,
+                        Icons.History
                     )[index]
                 )
                 val rightIcon = JLabel(AllIcons.Actions.Forward)
@@ -429,6 +451,98 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         val bubble = createBubble(text, UIUtil.getPanelBackground(), assistant = true)
         container.add(wrapHorizontal(bubble, Alignment.LEFT))
         refresh(container)
+    }
+
+    private fun historyBubble(text: String): JComponent {
+        val label = JLabel("<html>${text.replace("\n", "<br>")}</html>")
+
+        class RenameAction : AnAction("Rename", "Rename chat", Icons.Edit) {
+            override fun actionPerformed(e: AnActionEvent) {
+                // TODO: implement rename logic
+                JOptionPane.showMessageDialog(null, "Rename clicked for: $text")
+            }
+        }
+        class DeleteAction : AnAction("Delete", "Delete chat", Icons.Trash) {
+            override fun actionPerformed(e: AnActionEvent) {
+                // TODO: implement delete logic
+                val result = JOptionPane.showConfirmDialog(null, "Delete this item?", "Confirm Delete", JOptionPane.YES_NO_OPTION)
+                if (result == JOptionPane.YES_OPTION) {
+                    // perform deletion
+                }
+            }
+        }
+
+        class MoreActionGroup : ActionGroup("More", true) {
+
+            init {
+                templatePresentation.icon = AllIcons.Actions.More
+                templatePresentation.putClientProperty(ActionButton.HIDE_DROPDOWN_ICON, java.lang.Boolean.TRUE)
+            }
+
+            override fun getChildren(e: AnActionEvent?): Array<AnAction> {
+                // Populate additional actions here
+                return arrayOf(object : AnAction("Details") {
+                    override fun actionPerformed(e: AnActionEvent) {
+                        // TODO: show details
+                        JOptionPane.showMessageDialog(null, "Details for: $text")
+                    }
+                }, object : AnAction("Copy") {
+                    override fun actionPerformed(e: AnActionEvent) {
+                        // TODO: copy action
+//                        Toolkit.getDefaultToolkit().systemClipboard.setContents(
+//                            StringSelection(text), null)
+                    }
+                })
+            }
+        }
+
+        val actionGroup = DefaultActionGroup().apply {
+            add(RenameAction())
+            add(DeleteAction())
+            add(MoreActionGroup())
+        }
+
+        val actionToolbar = ActionManager.getInstance()
+            .createActionToolbar("HistoryBubbleToolbar", actionGroup, true)
+            .apply {
+                targetComponent = null
+                component.isOpaque = false
+                isReservePlaceAutoPopupIcon = false
+            }
+
+        val contentPanel = object : JPanel(BorderLayout()) {
+            init {
+                add(label, BorderLayout.CENTER)
+                add(actionToolbar.component.apply {
+                    border = JBUI.Borders.empty()
+                }, BorderLayout.EAST)
+
+                isOpaque = true
+                background = JBColor.LIGHT_GRAY
+                border = JBUI.Borders.empty(12, 20, 12, 8)
+
+                cursor = Cursor(Cursor.HAND_CURSOR)
+            }
+
+            override fun paintComponent(g: Graphics) {
+                val g2 = g.create() as Graphics2D
+                try {
+                    g2.setRenderingHint(
+                        RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON
+                    )
+                    g2.color = JBColor.LIGHT_GRAY
+                    g2.fillRoundRect(0, 0, width, height, 24, 24)
+                } finally {
+                    g2.dispose()
+                }
+            }
+
+            override fun getMaximumSize(): Dimension {
+                return Dimension(Int.MAX_VALUE, preferredSize.height)
+            }
+        }
+        return contentPanel
     }
 
     private fun createBubble(text: String, bg: Color, assistant: Boolean = false): JComponent {

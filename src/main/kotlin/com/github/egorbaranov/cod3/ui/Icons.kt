@@ -9,7 +9,11 @@ object Icons {
 
     val DeepSeek: Icon = getIcon("/icons/deepseek.png", Icons::class.java)
 
+    val History: Icon = getIcon("/icons/reactions/history.svg", Icons::class.java)
+
     val Qwen: Icon = getIcon("/icons/qwen.png", Icons::class.java)
+
+    val Edit: Icon = getIcon("/icons/reactions/pen.svg", Icons::class.java)
 
     val Google: Icon = getIcon("/icons/google.svg", Icons::class.java)
 
@@ -25,10 +29,11 @@ object Icons {
 
     val Mistral: Icon = getIcon("/icons/mistral.svg", Icons::class.java)
 
-    val Send: Icon = getIcon("/icons/send.svg", Icons::class.java)
+    val Send: Icon = getIcon("/icons/reactions/send.svg", Icons::class.java)
 
     val Sparkle: Icon = getIcon("/icons/sparkle.svg", Icons::class.java)
 
+    val Trash: Icon = getIcon("/icons/reactions/trash.svg", Icons::class.java)
     val Ollama: Icon = getIcon("/icons/ollama.svg", Icons::class.java)
 
     val ChatList: Icon = getIcon("/icons/reactions/chats.svg", Icons::class.java)
@@ -40,4 +45,5 @@ object Icons {
     val More: Icon = getIcon("/icons/reactions/more.svg", Icons::class.java)
     val NewChat: Icon = getIcon("/icons/reactions/new_chat.svg", Icons::class.java)
     val Settings: Icon = getIcon("/icons/reactions/settings.svg", Icons::class.java)
+    val Web: Icon = getIcon("/icons/reactions/global.svg", Icons::class.java)
 }
