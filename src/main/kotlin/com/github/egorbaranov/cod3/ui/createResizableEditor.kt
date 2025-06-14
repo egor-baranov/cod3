@@ -30,7 +30,7 @@ fun createResizableEditor(
     val editorField = object : EditorTextField("", project, FileTypes.PLAIN_TEXT) {
 
         init {
-            this.isOpaque = false
+            this.isOpaque = true
         }
 
         override fun paintComponent(g: Graphics) {
@@ -39,7 +39,6 @@ fun createResizableEditor(
             g2.color = JBColor.gray.darker().darker().darker().darker()
             g2.fillRoundRect(0, 0, width, height, JBUI.scale(16), JBUI.scale(16))
             g2.dispose()
-            super.paintComponent(g)
         }
 
         override fun paintBorder(g: Graphics?) {
@@ -77,7 +76,6 @@ fun createResizableEditor(
         override fun getInsets() = JBUI.insets(8)
     }.apply {
         setOneLineMode(false)
-        isOpaque = false
         setPlaceholder("Ask anything...")
         // Initial preferred/minimum size; width is flexible in layout
         preferredSize = Dimension(preferredSize.width, minHeight)

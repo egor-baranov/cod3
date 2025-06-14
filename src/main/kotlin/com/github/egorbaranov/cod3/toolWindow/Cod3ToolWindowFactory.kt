@@ -6,6 +6,7 @@ import com.github.egorbaranov.cod3.ui.Icons
 import com.github.egorbaranov.cod3.ui.components.RoundedBorder
 import com.github.egorbaranov.cod3.ui.components.RoundedTokenLabel
 import com.github.egorbaranov.cod3.ui.components.ScrollableSpacedPanel
+import com.github.egorbaranov.cod3.ui.components.TemplatePopupComponent
 import com.github.egorbaranov.cod3.ui.components.TokenChip
 import com.github.egorbaranov.cod3.ui.components.createComboBox
 import com.github.egorbaranov.cod3.ui.components.createModelComboBox
@@ -312,7 +313,13 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
     }
 
-    private fun showOrUpdatePopup(editorTextField: EditorTextField, contextReferencePanel: JPanel, prefix: String, atPos: Int, force: Boolean = false) {
+    private fun showOrUpdatePopup(
+        editorTextField: EditorTextField,
+        contextReferencePanel: JPanel,
+        prefix: String,
+        atPos: Int,
+        force: Boolean = false
+    ) {
         // Example list of component names:
         val allComponents = listOf(
             "JButton", "JLabel", "JPanel",
@@ -320,127 +327,79 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
             "JBScrollPane", "JBList", "JBComboBox"
         )
 
+        // Filter by prefix unless force == true
         val matches = allComponents.filter { it.startsWith(prefix, ignoreCase = true) || force }
         if (matches.isEmpty()) {
             lookupPopup?.cancel()
+            lookupPopup = null
             return
         }
 
-        list.selectionMode = ListSelectionModel.SINGLE_SELECTION
-        list.selectedIndex = 0
-        list.cellRenderer = object : DefaultListCellRenderer() {
-            override fun getListCellRendererComponent(
-                list: JList<*>?,
-                value: Any?,
-                index: Int,
-                isSelected: Boolean,
-                cellHasFocus: Boolean
-            ): Component {
-                val panel = JPanel(BorderLayout())
-                panel.border = BorderFactory.createEmptyBorder(0, 8, 0, 8)
-                panel.background = if (isSelected) list?.selectionBackground else list?.background
+        // Cancel any previous popup
+        lookupPopup?.cancel()
+        lookupPopup = null
 
-                val label = super.getListCellRendererComponent(
-                    list, value, index, isSelected, cellHasFocus
-                ) as JLabel
-                label.border = BorderFactory.createEmptyBorder()
-                label.isOpaque = false
-
-                val leftIcon = JLabel(
-                    listOf(
-                        AllIcons.Nodes.Folder,
-                        AllIcons.Actions.ShowCode,
-                        AllIcons.FileTypes.Text,
-                        AllIcons.Vcs.Branch,
-                        Icons.Web,
-                        Icons.History
-                    )[index]
-                )
-                val rightIcon = JLabel(AllIcons.Actions.Forward)
-
-                leftIcon.border = BorderFactory.createEmptyBorder(0, 0, 0, 8)
-                rightIcon.border = BorderFactory.createEmptyBorder(0, 12, 0, 0)
-
-                panel.add(leftIcon, BorderLayout.WEST)
-                panel.add(label, BorderLayout.CENTER)
-                panel.add(rightIcon, BorderLayout.EAST)
-
-                return panel
-            }
-        }
-
-        // Forward arrow and enter key presses to the list
+        // Keep Backspace/Delete listener for token inlays as before
+        // (Note: this may add multiple listeners if called repeatedly; consider managing a single listener
+        // if necessary.)
         editorTextField.addKeyListener(object : KeyAdapter() {
             override fun keyPressed(e: KeyEvent) {
                 val editor = editorTextField.editor ?: return
                 val caret = editor.caretModel.currentCaret
 
                 when (e.keyCode) {
-                    KeyEvent.VK_DOWN -> {
-                        val next = (list.selectedIndex + 1).coerceAtMost(list.model.size - 1)
-                        list.selectedIndex = next
-                        list.ensureIndexIsVisible(next)
-                        e.consume()
-                    }
-
-                    KeyEvent.VK_UP -> {
-                        val prev = (list.selectedIndex - 1).coerceAtLeast(0)
-                        list.selectedIndex = prev
-                        list.ensureIndexIsVisible(prev)
-                        e.consume()
-                    }
-
-                    KeyEvent.VK_ENTER -> {
-                        val sel = list.selectedValue ?: return
-                        replaceAt(editorTextField, sel, atPos)
-                        lookupPopup?.cancel()
-                        e.consume()
-                    }
-
-                    KeyEvent.VK_BACK_SPACE -> {
+                    java.awt.event.KeyEvent.VK_BACK_SPACE -> {
                         val pos = caret.offset  // offset before deletion
                         if (pos > 0) {
-                            // Check inlay immediately before this offset
                             removeTokenInlaysAtOffset(editor, pos - 1)
                         }
                     }
-
-                    KeyEvent.VK_DELETE -> {
-                        val pos = caret.offset  // offset of deletion
-                        // Check inlay at this offset
+                    java.awt.event.KeyEvent.VK_DELETE -> {
+                        val pos = caret.offset
                         removeTokenInlaysAtOffset(editor, pos)
                     }
+                    // Arrow keys and Enter for popup navigation are handled by TemplatePopupComponent
                 }
             }
         })
 
-        lookupPopup?.cancel()
-        lookupPopup = PopupChooserBuilder(list)
-            .setMovable(false)
-            .setResizable(false)
-            .setRequestFocus(true)
-            .setItemChosenCallback(Runnable {
-                val sel = list.selectedValue ?: return@Runnable
+        // Prepare a templatesMap so that the "Code" group holds our filtered component names.
+        // You can add other groups if you want, but here we only populate "Code".
+        val templatesMap: Map<String, List<String>> = mapOf(
+            "Code" to matches
+        )
 
-                if (force) {
-                    contextReferencePanel.add(RoundedTokenLabel("@$sel").apply {
-                        alignmentY = Component.CENTER_ALIGNMENT
-                    })
-                } else {
-                    replaceAt(editorTextField, "", atPos)
-                    addRoundedToken(editorTextField, editorTextField.document.text.length - 1, "@${sel}")
+        // Show the two-level popup: first group selection, then template selection.
+        // When the user picks a template (component name), we run the same insertion logic as before.
+        TemplatePopupComponent.showGroupPopup(
+            project = editorTextField.project,
+            editorTextField = editorTextField,
+            contextReferencePanel = contextReferencePanel,
+            prefix = prefix,
+            atPos = atPos,
+            force = force,
+            templatesMap = null
+        ) { selected ->
+            // onInsert callback: when user selects e.g. "JButton"
+            if (force) {
+                val label = RoundedTokenLabel(selected.text, selected.icon) {}.apply {
+                    alignmentY = Component.CENTER_ALIGNMENT
                 }
+                contextReferencePanel.add(label)
+                label.onClose = {
+                    contextReferencePanel.remove(label)
+                    refresh(contextReferencePanel)
+                }
+            } else {
+                replaceAt(editorTextField, "", atPos)
+                addRoundedToken(editorTextField, editorTextField.document.text.length - 1, selected.text)
+            }
+        }
 
-                lookupPopup?.cancel()
-            })
-            .createPopup()
-
-        val location = editorTextField.locationOnScreen
-        val popupSize = lookupPopup?.content?.preferredSize
-        lookupPopup?.showInScreenCoordinates(editorTextField, Point(location.x, location.y - (popupSize?.height ?: 0)))
-        list.requestFocusInWindow()
+        // Note: TemplatePopupComponent shows its own JBPopup internally and does not return it here.
+        // If you need to cancel it elsewhere, you can extend TemplatePopupComponent.showGroupPopup
+        // to return the JBPopup it creates and assign lookupPopup = <that JBPopup>.
     }
-
     private fun appendUserBubble(container: JPanel, text: String) {
         val bubble = createBubble(text, JBColor.LIGHT_GRAY)
         container.add(wrapHorizontal(bubble, Alignment.RIGHT))

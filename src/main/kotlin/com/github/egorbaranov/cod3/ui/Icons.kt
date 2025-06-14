@@ -7,6 +7,8 @@ object Icons {
 
     val Anthropic: Icon = getIcon("/icons/anthropic.svg", Icons::class.java)
 
+    val Code: Icon = getIcon("/icons/reactions/code.svg", Icons::class.java)
+
     val DeepSeek: Icon = getIcon("/icons/deepseek.png", Icons::class.java)
 
     val History: Icon = getIcon("/icons/reactions/history.svg", Icons::class.java)
