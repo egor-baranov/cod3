@@ -3,6 +3,8 @@ package com.github.egorbaranov.cod3.toolWindow
 import com.github.egorbaranov.cod3.ui.components.RoundedTokenRenderer
 import com.github.egorbaranov.cod3.services.MyProjectService
 import com.github.egorbaranov.cod3.ui.Icons
+import com.github.egorbaranov.cod3.ui.components.ChatBubble
+import com.github.egorbaranov.cod3.ui.components.ReferencePopupProvider
 import com.github.egorbaranov.cod3.ui.components.RoundedBorder
 import com.github.egorbaranov.cod3.ui.components.RoundedTokenLabel
 import com.github.egorbaranov.cod3.ui.components.ScrollableSpacedPanel
@@ -20,7 +22,9 @@ import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.SimpleToolWindowPanel
+import com.intellij.openapi.ui.addKeyboardAction
 import com.intellij.openapi.ui.popup.*
+import com.intellij.openapi.util.Key
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ex.ToolWindowEx
@@ -42,6 +46,7 @@ import scaledBy
 import java.awt.*
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
 import java.awt.geom.Area
 import java.awt.geom.Rectangle2D
 import java.awt.geom.RoundRectangle2D
@@ -89,15 +94,15 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
     private fun addChatTab(project: Project, toolWindow: ToolWindow) {
         // Create fresh per-tab components:
-        val editorTextField: EditorTextField = createResizableEditor(project, minHeight = 64)
+        val editorTextField: EditorTextField = createResizableEditor(project, minHeight = 42)
         val contextReferencePanel = ScrollableSpacedPanel(4).apply {
-            isOpaque = false
             alignmentY = Component.CENTER_ALIGNMENT
         }
 
+        val referencePopupProvider = ReferencePopupProvider(editorTextField, contextReferencePanel)
         // Build the chat panel, passing these fresh components:
         val panel = SimpleToolWindowPanel(true, true).apply {
-            setContent(createChatPanel(project, editorTextField, contextReferencePanel))
+            setContent(createChatPanel(project, referencePopupProvider))
         }
 
         val content: Content = ContentFactory.getInstance()
@@ -112,12 +117,13 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     }
 
     private fun addHistoryTab(project: Project, toolWindow: ToolWindow) {
-        // If history tab also needs its own editor etc, create fresh instances as needed.
-        val editorTextField: EditorTextField = createResizableEditor(project, minHeight = 64)
-        val contextReferencePanel = ScrollableSpacedPanel(4).apply {
-            isOpaque = false
-            alignmentY = Component.CENTER_ALIGNMENT
+        val cm = toolWindow.contentManager
+        val existing = cm.contents.firstOrNull { it.getUserData(HISTORY_TAB_KEY) == true }
+        if (existing != null) {
+            cm.setSelectedContent(existing)
+            return
         }
+
         val panel = SimpleToolWindowPanel(true, true).apply {
             setContent(createHistoryPanel(project))
         }
@@ -127,6 +133,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                 isCloseable = true
                 setShouldDisposeContent(true)
             }
+        content.putUserData(HISTORY_TAB_KEY, true)
         toolWindow.contentManager.addContent(content)
         toolWindow.contentManager.setSelectedContent(content)
     }
@@ -154,9 +161,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     }
 
 
-    private fun createChatPanel(project: Project, editorTextField: EditorTextField, contextReferencePanel: JPanel): JComponent {
-        val service = project.service<MyProjectService>()
-
+    private fun createChatPanel(project: Project, referencePopupProvider: ReferencePopupProvider): JComponent {
         val messageContainer = JBPanel<JBPanel<*>>().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = JBUI.Borders.empty(4)
@@ -167,59 +172,12 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
 
         val sendButton = IconLabelButton(Icons.Send, {
-            val text = editorTextField.text.trim()
-            if (text.isNotEmpty()) {
-                appendUserBubble(messageContainer, text)
-                editorTextField.text = ""
-                // simulate AI reply
-                val reply = service.getRandomNumber().toString()
-                appendAssistantBubble(messageContainer, "class URLShortener(\n" +
-                        "    private val baseUrl: String,\n" +
-                        "    paths: MutableList<String>,\n" +
-                        "    val indexSelector: (List<String>) -> String\n" +
-                        ") {\n" +
-                        "\n" +
-                        "    private val paths = ArrayList(paths)2\n" +
-                        "    private val idToUrl = ConcurrentHashMap<String, String>()\n" +
-                        "    private val lock = ReentrantLock()\n" +
-                        "    fun short(url: String): String = lock.withLock {\n" +
-                        "        if (paths.isEmpty()) {\n" +
-                        "            throw IllegalStateException(\"Paths exceeded\")\n" +
-                        "        }\n" +
-                        "\n" +
-                        "        var randomElement: String\n" +
-                        "        do {\n" +
-                        "            randomElement = indexSelector(paths)\n" +
-                        "        } while (idToUrl.containsKey(randomElement))\n" +
-                        "\n" +
-                        "        paths.remove(randomElement)\n" +
-                        "        idToUrl[randomElement] = url\n" +
-                        "\n" +
-                        "        return baseUrl + randomElement\n" +
-                        "    }f\n" +
-                        "\n" +
-                        "    fun unshort(url: String): String? {\n" +
-                        "        if (!url.startsWith(baseUrl)) {\n" +
-                        "            throw IllegalArgumentException(\"Url format is wrong\")")
-                SwingUtilities.invokeLater {
-                    scroll.verticalScrollBar.value = scroll.verticalScrollBar.maximum
-                }
-            }
+            sendMessage(referencePopupProvider, messageContainer, scroll)
         }).apply {
             minimumSize = Dimension(24, 24)
             preferredSize = Dimension(24, 24)
             cursor = Cursor(Cursor.HAND_CURSOR)
         }
-
-        // inline @-popup
-        editorTextField.document.addDocumentListener(object : DocumentListener {
-            override fun documentChanged(event: DocumentEvent) {
-                if (event.oldLength > 0) {
-                    removeTokenInlaysIfOverlapping(editorTextField, event.offset, event.oldLength)
-                }
-                checkPopup(editorTextField, contextReferencePanel = contextReferencePanel)
-            }
-        })
 
         val inputBar = object : JPanel(BorderLayout()) {
             init {
@@ -230,7 +188,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                 val g2 = g.create() as Graphics2D
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                 g2.color = JBUI.CurrentTheme.Focus.defaultButtonColor()
-                if (editorTextField.isFocusOwner) {
+                if (referencePopupProvider.editorTextField.isFocusOwner) {
                     g2.stroke = BasicStroke(1.5F)
                 } else {
                     g2.stroke = BasicStroke(0F)
@@ -264,21 +222,33 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }.apply {
             border = JBUI.Borders.empty(4)
 
-            val addContextButton = IconLabelButton(Icons.Mention, {checkPopup(editorTextField, contextReferencePanel, true)}).apply {
+            val addContextButton = IconLabelButton(Icons.Mention, {
+                referencePopupProvider.checkPopup(true)
+            }).apply {
                 minimumSize = Dimension(24, 24)
                 preferredSize = Dimension(24, 24)
                 cursor = Cursor(Cursor.HAND_CURSOR)
             }
 
+            val scrollPane = JBScrollPane(referencePopupProvider.contextReferencePanel).apply {
+                isOpaque = false
+                border = JBUI.Borders.empty(2, 0)
+                horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
+                verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_NEVER
+            }
+
+            scrollPane.viewport.isOpaque = false
+            scrollPane.viewport.background = UIUtil.TRANSPARENT_COLOR
+
             val header = panel {
                 row {
                     cell(addContextButton).align(AlignX.LEFT).gap(RightGap.SMALL)
-                    cell(contextReferencePanel).align(Align.FILL)
+                    cell(scrollPane).align(Align.FILL)
                 }
             }.andTransparent().withBorder(JBUI.Borders.empty(0, 4))
 
             add(header, BorderLayout.NORTH)
-            add(editorTextField, BorderLayout.CENTER)
+            add(referencePopupProvider.editorTextField, BorderLayout.CENTER)
             val comboBoxAction = createModelComboBox()
 
             val footer = panel {
@@ -299,107 +269,40 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
     }
 
-    private fun checkPopup(editorTextField: EditorTextField, contextReferencePanel: JPanel, force: Boolean = false) {
-        println("check popup")
-        val text = editorTextField.text
-        val caret = editorTextField.caretModel.currentCaret.offset
-        val at = text.lastIndexOf('@', caret)
-        if (text.endsWith("@") || force) {
-            val prefix = if (force) "" else text.substring(at, caret)
-            println("show popup")
-            showOrUpdatePopup(editorTextField, contextReferencePanel, prefix, at, force)
-        } else {
-            lookupPopup?.cancel()
+    private fun sendMessage(referencePopupProvider: ReferencePopupProvider, messageContainer: JPanel, scroll: JBScrollPane) {
+        val text = referencePopupProvider.editorTextField.text.trim()
+        if (text.isNotEmpty()) {
+            appendUserBubble(messageContainer, text)
+            referencePopupProvider.editorTextField.text = ""
+            // simulate AI reply
+            appendAssistantBubble(messageContainer, """
+Here is Kotlin code that represents some functionality
+Also it is multiline:
+
+```kotlin
+val scroll = JBScrollPane(messageContainer).apply {
+    verticalScrollBar.unitIncrement = JBUI.scale(16)
+}
+
+val sendButton = IconLabelButton(Icons.Send, {
+    val text = editorTextField.text.trim()
+    if (text.isNotEmpty()) {
+        appendUserBubble(messageContainer, text)
+        editorTextField.text = ""
+        // simulate AI reply
+        val reply = service.getRandomNumber().toString()
+    }
+})
+```
+
+This template provides some basic structure for a chat interface with a text editor and a send button. You can customize it further based on your requirements.
+""".trimIndent())
+            SwingUtilities.invokeLater {
+                scroll.verticalScrollBar.value = scroll.verticalScrollBar.maximum
+            }
         }
     }
 
-    private fun showOrUpdatePopup(
-        editorTextField: EditorTextField,
-        contextReferencePanel: JPanel,
-        prefix: String,
-        atPos: Int,
-        force: Boolean = false
-    ) {
-        // Example list of component names:
-        val allComponents = listOf(
-            "JButton", "JLabel", "JPanel",
-            "JBTextField", "JBLabel", "JBPanel",
-            "JBScrollPane", "JBList", "JBComboBox"
-        )
-
-        // Filter by prefix unless force == true
-        val matches = allComponents.filter { it.startsWith(prefix, ignoreCase = true) || force }
-        if (matches.isEmpty()) {
-            lookupPopup?.cancel()
-            lookupPopup = null
-            return
-        }
-
-        // Cancel any previous popup
-        lookupPopup?.cancel()
-        lookupPopup = null
-
-        // Keep Backspace/Delete listener for token inlays as before
-        // (Note: this may add multiple listeners if called repeatedly; consider managing a single listener
-        // if necessary.)
-        editorTextField.addKeyListener(object : KeyAdapter() {
-            override fun keyPressed(e: KeyEvent) {
-                val editor = editorTextField.editor ?: return
-                val caret = editor.caretModel.currentCaret
-
-                when (e.keyCode) {
-                    java.awt.event.KeyEvent.VK_BACK_SPACE -> {
-                        val pos = caret.offset  // offset before deletion
-                        if (pos > 0) {
-                            removeTokenInlaysAtOffset(editor, pos - 1)
-                        }
-                    }
-                    java.awt.event.KeyEvent.VK_DELETE -> {
-                        val pos = caret.offset
-                        removeTokenInlaysAtOffset(editor, pos)
-                    }
-                    // Arrow keys and Enter for popup navigation are handled by TemplatePopupComponent
-                }
-            }
-        })
-
-        // Prepare a templatesMap so that the "Code" group holds our filtered component names.
-        // You can add other groups if you want, but here we only populate "Code".
-        val templatesMap: Map<String, List<String>> = mapOf(
-            "Code" to matches
-        )
-
-        // Show the two-level popup: first group selection, then template selection.
-        // When the user picks a template (component name), we run the same insertion logic as before.
-        TemplatePopupComponent.showGroupPopup(
-            project = editorTextField.project,
-            editorTextField = editorTextField,
-            contextReferencePanel = contextReferencePanel,
-            prefix = prefix,
-            atPos = atPos,
-            force = force,
-            templatesMap = null
-        ) { selected ->
-            // onInsert callback: when user selects e.g. "JButton"
-            if (force) {
-                val label = RoundedTokenLabel(selected.text, selected.icon) {}.apply {
-                    alignmentY = Component.CENTER_ALIGNMENT
-                }
-                contextReferencePanel.add(label)
-                label.onClose = {
-                    contextReferencePanel.remove(label)
-                    refresh(contextReferencePanel)
-                }
-            } else {
-                replaceAt(editorTextField, "", atPos)
-                addRoundedToken(editorTextField, editorTextField.document.text.length - 1, selected.text)
-            }
-        }
-
-        // Note: TemplatePopupComponent shows its own JBPopup internally and does not return it here.
-        // If you need to cancel it elsewhere, you can extend TemplatePopupComponent.showGroupPopup
-        // to return the JBPopup it creates and assign lookupPopup = <that JBPopup>.
-    }
     private fun appendUserBubble(container: JPanel, text: String) {
         val bubble = createBubble(text, JBColor.LIGHT_GRAY)
         container.add(wrapHorizontal(bubble, Alignment.RIGHT))
@@ -505,61 +408,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     }
 
     private fun createBubble(text: String, bg: Color, assistant: Boolean = false): JComponent {
-        val label = JLabel("<html>${text.replace("\n", "<br>")}</html>").apply {
-            border = JBUI.Borders.empty(8, 12)
-        }
-        return object : JPanel(BorderLayout()) {
-            init {
-                isOpaque = false
-                background = bg
-                add(label, BorderLayout.CENTER)
-                if (assistant) add(
-                    JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
-                        border = JBUI.Borders.empty(4, 0)
-
-                        add(IconLabelButton(Icons.Like.scaledBy(1.1), {}).apply {
-                            minimumSize = Dimension(24, 24)
-                            preferredSize = Dimension(24, 24)
-                            cursor = Cursor(Cursor.HAND_CURSOR)
-                        })
-                        add(Box.createHorizontalStrut(4))
-                        add(IconLabelButton(Icons.Dislike.scaledBy(1.1), {}).apply {
-                            minimumSize = Dimension(24, 24)
-                            preferredSize = Dimension(24, 24)
-                            cursor = Cursor(Cursor.HAND_CURSOR)
-                        })
-                        add(Box.createHorizontalStrut(4))
-                        add(IconLabelButton(Icons.Clipboard.scaledBy(1.1), {}).apply {
-                            minimumSize = Dimension(24, 24)
-                            preferredSize = Dimension(24, 24)
-                            cursor = Cursor(Cursor.HAND_CURSOR)
-                        })
-                        add(Box.createHorizontalStrut(4))
-                        add(IconLabelButton(Icons.More.scaledBy(1.1), {}).apply {
-                            minimumSize = Dimension(24, 24)
-                            preferredSize = Dimension(24, 24)
-                            cursor = Cursor(Cursor.HAND_CURSOR)
-                        })
-                    }, BorderLayout.SOUTH
-                )
-                maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
-            }
-
-            override fun paintComponent(g: Graphics) {
-                val g2 = g.create() as Graphics2D
-                try {
-                    g2.color = background
-                    g2.setRenderingHint(
-                        RenderingHints.KEY_ANTIALIASING,
-                        RenderingHints.VALUE_ANTIALIAS_ON
-                    )
-                    g2.fillRoundRect(0, 0, width, height, 16, 16)
-                } finally {
-                    g2.dispose()
-                }
-                super.paintComponent(g)
-            }
-        }
+        return ChatBubble(text, bg, assistant)
     }
 
     private fun wrapHorizontal(comp: JComponent, alignment: Alignment): JComponent {
@@ -582,47 +431,14 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         return wrapper
     }
 
-    fun addRoundedToken(editorTextField: EditorTextField, offset: Int, tokenText: String) {
-        val editor = editorTextField.editor ?: return
-        val inlayModel = editor.inlayModel
-        inlayModel.addInlineElement(offset, true, RoundedTokenRenderer(tokenText))
-    }
-
-    private fun removeTokenInlaysIfOverlapping(field: EditorTextField, offset: Int, length: Int) {
-        val editor = field.editor ?: return
-        // After deletion, offsets shift. We search a small range around the deletion point.
-        // For simplicity, check range [offset, offset], but you might expand range if token can span multiple chars.
-        removeTokenInlaysAtOffset(editor, offset)
-    }
-
-    /**
-     * Remove any inline inlay whose renderer is RoundedTokenRenderer at the given offset.
-     */
-    private fun removeTokenInlaysAtOffset(editor: com.intellij.openapi.editor.Editor, offset: Int) {
-        // Query inline inlays at this offset. Use getInlineElementsInRange(start, end).
-        // Here we query a small range [offset, offset].
-        val inlays = editor.inlayModel.getInlineElementsInRange(offset, offset)
-        for (inlay in inlays) {
-            val renderer = inlay.renderer
-            if (renderer is RoundedTokenRenderer) {
-                inlay.dispose()
-            }
-        }
-    }
-
-    private fun replaceAt(field: EditorTextField, sel: String, atPos: Int) {
-        val t = field.text
-        val c = if (field.caretModel.allCarets.isEmpty()) 0 else field.caretModel.currentCaret.offset
-        val before = t.substring(0, atPos)
-        val after = t.substring(c)
-        field.text = "$before$sel $after"
-        field.caretModel.currentCaret.moveToOffset(before.length + sel.length + 1)
-    }
-
     private fun refresh(container: JPanel) {
         container.revalidate()
         container.repaint()
     }
 
     private enum class Alignment { LEFT, RIGHT }
+
+    companion object {
+        private val HISTORY_TAB_KEY = Key.create<Boolean>("com.example.Cod3.HISTORY_TAB")
+    }
 }

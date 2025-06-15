@@ -69,7 +69,7 @@ fun createResizableEditor(
         override fun createEditor(): EditorEx {
             val editorEx = super.createEditor()
             editorEx.settings.isUseSoftWraps = true
-            editorEx.backgroundColor = service<com.intellij.openapi.editor.colors.EditorColorsManager>().globalScheme.defaultBackground
+            editorEx.backgroundColor = JBColor.gray.darker().darker().darker().darker()
             return editorEx
         }
 

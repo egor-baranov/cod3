@@ -2,6 +2,10 @@ package com.github.egorbaranov.cod3.ui
 
 import PlaceholderTextField
 import RoundedIconButton
+import com.github.egorbaranov.cod3.ui.components.ReferencePopupProvider
+import com.github.egorbaranov.cod3.ui.components.RoundedTokenLabel
+import com.github.egorbaranov.cod3.ui.components.ScrollableSpacedPanel
+import com.github.egorbaranov.cod3.ui.components.TemplatePopupComponent
 import com.github.egorbaranov.cod3.ui.components.createComboBox
 import com.github.egorbaranov.cod3.ui.components.createModelComboBox
 import com.intellij.icons.AllIcons
@@ -14,10 +18,12 @@ import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
+import com.intellij.ui.EditorTextField
 import com.intellij.ui.JBColor
 import com.intellij.ui.awt.RelativePoint
 import com.intellij.ui.components.CheckBox
 import com.intellij.ui.components.IconLabelButton
+import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.IconUtil
@@ -68,65 +74,79 @@ fun insertBlockInlayAboveSelection(editor: Editor, project: Project) {
         .setMinSize(Dimension(500, 70))
         .createPopup()
 
-    panel.add(JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).also {
-        it.border = JBUI.Borders.empty(4, 4, 2, 4)
+    // --- Center: Scrollable Horizontal Panel ---
+    val scrollPanel = ScrollableSpacedPanel(4).apply {
+        isOpaque = false
+        alignmentY = Component.CENTER_ALIGNMENT
+    }
 
-        val rejectLabel = JLabel("Reject ⇧⌘⌫").apply {
+    val referencePopupProvider = ReferencePopupProvider(editorTextField = textField, contextReferencePanel = scrollPanel)
+
+    panel.add(JPanel(BorderLayout()).apply {
+        border = JBUI.Borders.empty(4, 4, 2, 4)
+        isOpaque = false
+
+        // --- Left: Add Context Button ---
+        add(IconLabelButton(Icons.Mention) {
+            referencePopupProvider.checkPopup(true)
+        }.apply {
+            minimumSize = Dimension(24, 24)
+            preferredSize = Dimension(24, 24)
             cursor = Cursor(Cursor.HAND_CURSOR)
-            font = font.deriveFont(10f)
-            foreground = JBColor.GRAY
+        }, BorderLayout.WEST)
+
+        val scrollPane = JBScrollPane(scrollPanel).apply {
+            border = JBUI.Borders.empty(2, 0)
+            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
+            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_NEVER
+            preferredSize = Dimension(100, 24)
         }
 
-        val acceptLabel = JLabel("Accept ⌘⏎").apply {
-            cursor = Cursor(Cursor.HAND_CURSOR)
-            font = font.deriveFont(10f)
-            foreground = JBColor.GRAY
-        }
+        add(scrollPane, BorderLayout.CENTER)
 
-        fun wrapInRoundedPanel(label: JLabel, color: Color): JPanel {
-            return object : JPanel(BorderLayout()) {
-                init {
-                    isOpaque = false
-                    border = JBUI.Borders.empty(2, 6)
-                    add(label, BorderLayout.CENTER)
+        // --- Right: Action Buttons ---
+        add(ScrollableSpacedPanel(1).apply {
+            isOpaque = false
+            alignmentY = Component.CENTER_ALIGNMENT
+
+            fun actionLabel(text: String, color: Color): JPanel {
+                val label = JLabel(text).apply {
+                    cursor = Cursor(Cursor.HAND_CURSOR)
+                    font = font.deriveFont(10f)
+                    foreground = JBColor.GRAY
                 }
 
-                override fun getPreferredSize(): Dimension {
-                    val preferred = super.getPreferredSize()
-                    return Dimension(preferred.width + 4, preferred.height)
-                }
+                return object : JPanel(BorderLayout()) {
+                    init {
+                        isOpaque = false
+                        border = JBUI.Borders.empty(2, 6)
+                        add(label, BorderLayout.CENTER)
+                    }
 
-                override fun paintComponent(g: Graphics) {
-                    val g2 = g as Graphics2D
-                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                    g2.color = color
-                    g2.fillRoundRect(0, 0, width, height, 12, 12)
+                    override fun paintComponent(g: Graphics) {
+                        val g2 = g as Graphics2D
+                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                        g2.color = color
+                        g2.fillRoundRect(0, 0, width, height, 12, 12)
+                    }
                 }
             }
-        }
 
-// Add them to your container
-        it.add(wrapInRoundedPanel(rejectLabel, JBColor.background()))
-        it.add(Box.createHorizontalStrut(2))
-        it.add(wrapInRoundedPanel(acceptLabel, JBColor.border()))
-        it.add(Box.createHorizontalStrut(2))
+            add(actionLabel("Reject ⇧⌘⌫", JBColor.background()))
+            add(Box.createHorizontalStrut(4))
+            add(actionLabel("Accept ⌘⏎", JBColor.border()))
+            add(Box.createHorizontalStrut(4))
 
-        it.add(JLabel(AllIcons.Actions.Close).also {
-            it.cursor = Cursor(Cursor.HAND_CURSOR)
-            it.addMouseListener(
-                object: MouseListener {
-                    override fun mouseClicked(e: MouseEvent?) { popup.cancel() }
+            add(JLabel(AllIcons.Actions.Close).apply {
+                cursor = Cursor(Cursor.HAND_CURSOR)
+                addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent?) {
+                        popup.cancel()
+                    }
+                })
+            })
+        }, BorderLayout.EAST)
 
-                    override fun mousePressed(e: MouseEvent?) { popup.cancel() }
-
-                    override fun mouseReleased(e: MouseEvent?) {}
-
-                    override fun mouseEntered(e: MouseEvent?) {}
-
-                    override fun mouseExited(e: MouseEvent?) {}
-                }
-            )
-        })
     }, BorderLayout.NORTH)
     panel.add(textField, BorderLayout.CENTER)
 
@@ -172,7 +192,7 @@ fun insertBlockInlayAboveSelection(editor: Editor, project: Project) {
     // Position updater
     val updatePopupPosition = {
         val basePoint = editor.visualPositionToXY(visualPos)
-        val popupPoint = Point(0, basePoint.y - lineHeight - 56)
+        val popupPoint = Point(0, basePoint.y - lineHeight - 84)
         popup.setLocation(RelativePoint(editorComponent, popupPoint).screenPoint)
     }
 
