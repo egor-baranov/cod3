@@ -47,7 +47,7 @@
         <applicationService
                 serviceImplementation="com.github.egorbaranov.cod3.settings.PluginSettingsState"/>
 
-        <toolWindow factoryClass="com.github.egorbaranov.cod3.toolWindow.Cod3ToolWindowFactory" id="Cod3" canCloseContents="true"/>
+        <toolWindow factoryClass="com.github.egorbaranov.cod3.toolWindow.Cod3ToolWindowFactory" id="Cod3" canCloseContents="true" icon="AllIcons.Actions.EnableNewUi"/>
         <postStartupActivity implementation="com.github.egorbaranov.cod3.startup.MyProjectActivity"/>
         <editorFloatingToolbarProvider implementation="com.github.egorbaranov.cod3.actions.MyFloatingToolbarProvider"/>
     </extensions>

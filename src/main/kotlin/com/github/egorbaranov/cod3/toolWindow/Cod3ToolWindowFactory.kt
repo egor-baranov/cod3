@@ -55,7 +55,6 @@ import kotlin.text.startsWith
 
 class Cod3ToolWindowFactory : ToolWindowFactory {
 
-    override val icon: Icon? = AllIcons.Actions.EnableNewUi
     override fun shouldBeAvailable(project: Project): Boolean = true
     private var lookupPopup: JBPopup? = null
     private val list = JBList(listOf("Files & Folders", "Code", "Docs", "Git", "Web", "Recent Changes"))

@@ -17,6 +17,7 @@ import com.intellij.openapi.ui.popup.JBPopupListener
 import com.intellij.openapi.ui.popup.LightweightWindowEvent
 import com.intellij.openapi.ui.popup.ListPopup
 import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.popup.ActionPopupOptions
 import com.intellij.ui.popup.PopupFactoryImpl
 import com.intellij.ui.popup.list.PopupListElementRenderer
 import com.intellij.util.ui.JBUI
@@ -241,19 +242,22 @@ fun createModelComboBox(default: String, sections: List<Section>): JComponent {
         ): JBPopup {
             // Use the default ActionGroupPopup but override renderer to show secondary label if desired.
             val popup: ListPopup = object : PopupFactoryImpl.ActionGroupPopup(
+                /* parentPopup = */ null,
                 /* title = */ null,
-                group,
-                context,
-                /* showNumbers */ false,
-                /* enableAlpha */ false,
-                /* requestFocus */ true,
-                /* showSubmenuOnHover */ false,
-                /* dataProvider */ null,
-                /* maxRowCount */ -1,
-                /* preselectCondition */ null,
-                /* speedSearch */ null,
-                MenuItemPresentationFactory(),
-                /* honorActionMnemonics */ false
+                /* actionGroup = */ group,
+                /* dataContext = */ context,
+                /* actionPlace = */ "Cod3.ToolWindow.Popup",
+                /* presentationFactory = */ MenuItemPresentationFactory(),
+                /* options = */ ActionPopupOptions.create(
+                    /* showNumbers = */ false,
+                    /* useAlphaAsNumbers = */ false,
+                    /* showDisabledActions = */ false,
+                    /* honorActionMnemonics = */ false,
+                    /* maxRowCount = */ -1,
+                    /* autoSelection = */ false,
+                    /* preselectCondition = */ null
+                ),
+                /* disposeCallback = */ disposeCallback
             ) {
                 override fun getListElementRenderer(): ListCellRenderer<*> {
                     return object : PopupListElementRenderer<Any>(this) {
@@ -288,7 +292,6 @@ fun createModelComboBox(default: String, sections: List<Section>): JComponent {
                         ) {
                             super.customizeComponent(list, value, isSelected)
                             setupSecondaryLabel()
-                            // If you want to show extra info in secondaryLabel, implement here.
                         }
 
                         private fun setupSecondaryLabel() {
@@ -296,20 +299,24 @@ fun createModelComboBox(default: String, sections: List<Section>): JComponent {
                                 font = JBUI.Fonts.toolbarSmallComboBoxFont()
                                 border = JBUI.Borders.emptyLeft(8)
                                 clear()
-                                // e.g., append("info") if needed
+                                // Optionally add extra info: append("info")
                             }
                         }
                     }
                 }
+            }.apply {
+                setShowSubmenuOnHover(true)
+
+                // If a dispose callback was passed, listen for popup close
+                disposeCallback?.let {
+                    addListener(object : JBPopupListener {
+                        override fun onClosed(event: LightweightWindowEvent) {
+                            it.run()
+                        }
+                    })
+                }
             }
-            if (disposeCallback != null) {
-                popup.addListener(object : JBPopupListener {
-                    override fun onClosed(event: LightweightWindowEvent) {
-                        disposeCallback.run()
-                    }
-                })
-            }
-            popup.setShowSubmenuOnHover(true)
+
             return popup
         }
 
