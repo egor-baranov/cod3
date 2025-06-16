@@ -37,11 +37,11 @@ class PluginConfigurable : SearchableConfigurable {
 
     override fun createComponent(): JComponent {
         val settings = PluginSettingsState.getInstance()
-        apiKeyField = JBTextField(settings.apiKey, 40).also {
-            it.text = PluginSettingsState.getInstance().apiKey
+        apiKeyField = JBTextField(settings.openAIApiKey, 40).also {
+            it.text = PluginSettingsState.getInstance().openAIApiKey
         }
-        apiUrlField = JBTextField(settings.apiUrl, 40).also {
-            it.text = PluginSettingsState.getInstance().apiUrl
+        apiUrlField = JBTextField(settings.openAIApiUrl, 40).also {
+            it.text = PluginSettingsState.getInstance().openAIApiUrl
         }
 
         mySettingsComponent = panel {
@@ -93,23 +93,23 @@ class PluginConfigurable : SearchableConfigurable {
 
     override fun isModified(): Boolean {
         val settings = PluginSettingsState.getInstance()
-        return apiKeyField.text != settings.apiKey ||
-                apiUrlField.text != settings.apiUrl ||
+        return apiKeyField.text != settings.openAIApiKey ||
+                apiUrlField.text != settings.openAIApiUrl ||
                 retryQuantityDropdown.item != settings.retryQuantity
     }
 
     override fun apply() {
         val settings = PluginSettingsState.getInstance()
-        settings.apiKey = apiKeyField.text
-        settings.apiUrl = apiUrlField.text.takeIf { it.isNotEmpty() } ?: PluginSettingsState.DEFAULT_API_URL
+        settings.openAIApiKey = apiKeyField.text
+        settings.openAIApiUrl = apiUrlField.text.takeIf { it.isNotEmpty() } ?: PluginSettingsState.DEFAULT_OPENAI_API_URL
         settings.retryQuantity = retryQuantityDropdown.item
         settings.indexingSteps = indexingStepsDropdown.item
     }
 
     override fun reset() {
         val settings = PluginSettingsState.getInstance()
-        apiKeyField.text = settings.apiKey
-        apiUrlField.text = settings.apiUrl
+        apiKeyField.text = settings.openAIApiKey
+        apiUrlField.text = settings.openAIApiUrl
         retryQuantityDropdown.item = settings.retryQuantity
         indexingStepsDropdown.item = settings.indexingSteps
     }

@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
+import ee.carlrobert.llm.client.google.models.GoogleModel
 
 @State(
     name = "MyPluginSettings",
@@ -11,8 +12,24 @@ import com.intellij.openapi.components.Storage
 )
 class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
 
-    var apiKey: String = ""
-    var apiUrl: String = DEFAULT_API_URL
+    var openAIApiKey: String = ""
+    var openAIApiUrl: String = DEFAULT_OPENAI_API_URL
+
+    var googleApiKey: String = ""
+    var googleApiUrl: String = ""
+    var googleModel: GoogleModel = GoogleModel.GEMINI_2_5_PRO_EXP
+
+    var claudeApiKey: String = ""
+    var claudeApiVersion: String = ""
+    var claudeApiUrl: String = ""
+
+    var ollamaApiKey: String = ""
+    var ollamaApiUrl: String = ""
+    var ollamaPort: Int = 8080
+
+    var llamaApiKey: String = ""
+    var llamaApiUrl: String = ""
+    var llamaPort: Int = 8081
 
     var retryQuantity: Int = 1
     var indexingSteps: Int = 1
@@ -24,12 +41,12 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
     }
 
     fun copyStateTo(target: PluginSettingsState) {
-        target.apiKey = this.apiKey
-        target.apiUrl = this.apiUrl
+        target.openAIApiKey = this.openAIApiKey
+        target.openAIApiUrl = this.openAIApiUrl
     }
 
     companion object {
-        const val DEFAULT_API_URL = "https://api.openai.com/v1/chat/completions"
+        const val DEFAULT_OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 
         fun getInstance(): PluginSettingsState =
             ApplicationManager.getApplication().getService(PluginSettingsState::class.java)

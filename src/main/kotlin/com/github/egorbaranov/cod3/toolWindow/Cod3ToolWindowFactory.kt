@@ -93,7 +93,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
     private fun addChatTab(project: Project, toolWindow: ToolWindow) {
         // Create fresh per-tab components:
-        val editorTextField: EditorTextField = createResizableEditor(project, minHeight = 42)
+        val editorTextField: EditorTextField = createResizableEditor(project, minHeight = 48)
         val contextReferencePanel = ScrollableSpacedPanel(4).apply {
             alignmentY = Component.CENTER_ALIGNMENT
         }

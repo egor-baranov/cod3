@@ -46,6 +46,9 @@
                 displayName="Cod3 Plugin"/>
         <applicationService
                 serviceImplementation="com.github.egorbaranov.cod3.settings.PluginSettingsState"/>
+        <applicationService
+                serviceImplementation="com.github.egorbaranov.cod3.state.ChatState"/>
+
 
         <toolWindow factoryClass="com.github.egorbaranov.cod3.toolWindow.Cod3ToolWindowFactory" id="Cod3" canCloseContents="true" icon="AllIcons.Actions.EnableNewUi"/>
         <postStartupActivity implementation="com.github.egorbaranov.cod3.startup.MyProjectActivity"/>

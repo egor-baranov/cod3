@@ -41,8 +41,8 @@ class RestApiClient(
         logger.debug("Request body: $jsonBody")
 
         val request = Request.Builder()
-            .url(pluginSettingsState.apiUrl)
-            .addHeader("Authorization", "Bearer ${pluginSettingsState.apiKey}")
+            .url(pluginSettingsState.openAIApiUrl)
+            .addHeader("Authorization", "Bearer ${pluginSettingsState.openAIApiKey}")
             .addHeader("Content-Type", "application/json")
             .post(jsonBody.toRequestBody())
             .build()
