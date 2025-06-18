@@ -55,11 +55,11 @@ class PluginConfigurable : SearchableConfigurable {
                     )
                 }
 
-                row("API key") {
+                row("OpenAI API key") {
                     cell(apiKeyField)
                 }
 
-                row("LLM API url") {
+                row("OpenAI API url") {
                     cell(apiUrlField)
                 }
 

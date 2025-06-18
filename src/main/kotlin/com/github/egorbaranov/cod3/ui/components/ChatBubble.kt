@@ -18,73 +18,134 @@ import java.awt.event.ComponentEvent
 import javax.swing.*
 
 class ChatBubble(
-    text: String,
+    initialText: String,
     bg: Color,
     assistant: Boolean = false
 ) : JPanel(BorderLayout()) {
 
     private val createdEditors = mutableListOf<Editor>()
+    private val isAssistant: Boolean = assistant
+    private var currentText: String = initialText
+    private val contentPanel: JPanel
 
     init {
         isOpaque = false
         background = bg
 
-        val components = parseMarkdownContent(text) { newHeight ->
-            updateHeight(newHeight)
-        }
-
-        val contentPanel = JPanel().apply {
+        // Initialize contentPanel
+        contentPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = JBUI.Borders.empty(8, if (assistant) 4 else 12)
+            border = JBUI.Borders.empty(8, if (isAssistant) 4 else 12)
             isOpaque = false
             alignmentX = Component.LEFT_ALIGNMENT
-            maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+            maximumSize = Dimension(preferredSize.width, preferredSize.height)
         }
 
+        // Populate initial content and adjust height
+        rebuildContentAndAdjustHeight()
+        add(contentPanel, BorderLayout.CENTER)
+
+//        if (isAssistant) {
+//            add(createAssistantToolbar(), BorderLayout.SOUTH)
+//        }
+
+        maximumSize = Dimension(preferredSize.width, preferredSize.height)
+    }
+
+    /**
+     * Updates the bubble's text content, rebuilding components accordingly.
+     */
+    fun updateText(newText: String) {
+        if (newText == currentText || newText.length < currentText.length) return
+        // Release existing editors
+
+        val factory = EditorFactory.getInstance()
+        for (editor in createdEditors) {
+            factory.releaseEditor(editor)
+        }
+        createdEditors.clear()
+
+        // Update text
+        currentText = newText
+
+        // Clear previous components
+        contentPanel.removeAll()
+
+        // Rebuild content and adjust height
+        rebuildContentAndAdjustHeight()
+
+        // Revalidate and repaint to apply changes
+        revalidate()
+        repaint()
+    }
+
+    /**
+     * Rebuilds contentPanel based on currentText and adjusts height.
+     */
+    private fun rebuildContentAndAdjustHeight() {
+        val components = parseMarkdownContent(currentText) { newHeight ->
+            // Editor-specific height changes: recalc full content height
+            SwingUtilities.invokeLater { adjustHeightToContent() }
+        }
+        contentPanel.removeAll()
         components.forEachIndexed { idx, comp ->
-            comp.alignmentX = Component.LEFT_ALIGNMENT
+            comp.alignmentX = LEFT_ALIGNMENT
             contentPanel.add(comp)
             if (idx < components.size - 1) {
                 contentPanel.add(Box.createVerticalStrut(JBUI.scale(8)))
             }
         }
-
-        add(contentPanel, BorderLayout.CENTER)
-
-        if (assistant) {
-            add(
-                JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
-                    border = JBUI.Borders.empty(4, 0)
-                    isOpaque = false
-
-                    fun iconBtn(icon: Icon) = IconLabelButton(icon.scaledBy(1.1)) {}.apply {
-                        minimumSize = Dimension(JBUI.scale(24), JBUI.scale(24))
-                        preferredSize = Dimension(JBUI.scale(24), JBUI.scale(24))
-                        cursor = Cursor(Cursor.HAND_CURSOR)
-                    }
-
-                    add(iconBtn(Icons.Like))
-                    add(Box.createHorizontalStrut(JBUI.scale(4)))
-                    add(iconBtn(Icons.Dislike))
-                    add(Box.createHorizontalStrut(JBUI.scale(4)))
-                    add(iconBtn(Icons.Clipboard))
-                    add(Box.createHorizontalStrut(JBUI.scale(4)))
-                    add(iconBtn(Icons.More))
-                },
-                BorderLayout.SOUTH
-            )
-        }
-
-        maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+        // After adding components, ensure layout and update height even if no editors
+        SwingUtilities.invokeLater { adjustHeightToContent() }
     }
 
-    private fun updateHeight(newHeight: Int) {
-        val currentPref = preferredSize
-        val newPrefHeight = newHeight + JBUI.scale(16) // always use new height + padding
+    /**
+     * Adjusts the ChatBubble height based on total contentPanel children heights.
+     */
+    private fun adjustHeightToContent() {
+        // Sum heights of each component and struts in contentPanel
+        var total = 0
+        for (i in 0 until contentPanel.componentCount) {
+            val comp = contentPanel.getComponent(i)
+            val pref = comp.preferredSize
+            total += pref.height
+        }
+        // total now includes children heights; padding: contentPanel border adds 8 top and bottom
+        // updateHeight expects content height without padding, and will add JBUI.scale(16)
+        updateHeight(total)
+    }
 
-        preferredSize = Dimension(currentPref.width, newPrefHeight)
-        minimumSize = Dimension(currentPref.width, newPrefHeight)
-        maximumSize = Dimension(Int.MAX_VALUE, newPrefHeight)
+    /**
+     * Creates the assistant toolbar (like/dislike/etc) for assistant bubbles
+     */
+    private fun createAssistantToolbar(): JComponent {
+        return JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
+            border = JBUI.Borders.empty(4, 0)
+            isOpaque = false
+
+            fun iconBtn(icon: Icon) = IconLabelButton(icon.scaledBy(1.1)) {}.apply {
+                minimumSize = Dimension(JBUI.scale(24), JBUI.scale(24))
+                preferredSize = Dimension(JBUI.scale(24), JBUI.scale(24))
+                cursor = Cursor(Cursor.HAND_CURSOR)
+            }
+
+            add(iconBtn(Icons.Like))
+            add(Box.createHorizontalStrut(JBUI.scale(4)))
+            add(iconBtn(Icons.Dislike))
+            add(Box.createHorizontalStrut(JBUI.scale(4)))
+            add(iconBtn(Icons.Clipboard))
+            add(Box.createHorizontalStrut(JBUI.scale(4)))
+            add(iconBtn(Icons.More))
+        }
+    }
+
+    private fun updateHeight(contentHeight: Int) {
+        // contentHeight includes all child component heights and spacing
+        val paddedHeight = contentHeight + JBUI.scale(16) // 8px top + 8px bottom padding
+        val currentPref = preferredSize
+//        preferredSize = Dimension(currentPref.width, paddedHeight)
+//        minimumSize = Dimension(currentPref.width, paddedHeight)
+//        maximumSize = Dimension(Int.MAX_VALUE, paddedHeight)
 
         revalidate()
         repaint()
@@ -141,7 +202,7 @@ class ChatBubble(
         return result
     }
 
-    private fun createLabelComponent(text: String): JLabel {
+    private fun createLabelComponent(text: String): JTextArea {
         val escaped = text
             .replace("&", "&amp;")
             .replace("<", "&lt;")
@@ -149,17 +210,21 @@ class ChatBubble(
             .replace("\n", "<br>")
         val html = "<html>$escaped</html>"
 
-        return JLabel(html).apply {
-            alignmentX = Component.LEFT_ALIGNMENT
+        return JTextArea().apply {
+            this.text = text
+            this.isOpaque = false
+            this.lineWrap = true
+            this.wrapStyleWord = true
+            alignmentX = LEFT_ALIGNMENT
             foreground = if (isDarkBackground(background)) Color.WHITE else Color.BLACK
 
             val fm = getFontMetrics(font)
-            val lines = text.count { it == '\n' } + 1
-            val height = fm.height * lines + JBUI.scale(8)
+            val lines = text.lines().size + 1
+            val height = fm.height * lines
 
-            minimumSize = Dimension(0, height)
-            preferredSize = Dimension(0, height)
-            maximumSize = Dimension(Int.MAX_VALUE, height)
+//            minimumSize = Dimension(0, height)
+//            preferredSize = Dimension(0, height)
+//            maximumSize = Dimension(Int.MAX_VALUE, height)
         }
     }
 
@@ -200,13 +265,12 @@ class ChatBubble(
             background = JBColor.darkGray.darker().darker().darker()
             border = JBUI.Borders.empty(8, 0)
 
-            add(IconLabelButton(AllIcons.Actions.Execute.scaledBy(0.8)) { println("Dislike clicked") }.apply {
+            add(IconLabelButton(AllIcons.Actions.Execute.scaledBy(0.8)) { println("Apply clicked") }.apply {
                 text = "Apply"
                 cursor = Cursor(Cursor.HAND_CURSOR)
                 minimumSize = preferredSize
             })
-            // Example buttons, customize icons and actions as you like
-            add(IconLabelButton(AllIcons.Toolbar.AddSlot.scaledBy(0.8)) { println("Like clicked") }.apply {
+            add(IconLabelButton(AllIcons.Toolbar.AddSlot.scaledBy(0.8)) { println("Insert clicked") }.apply {
                 text = "Insert"
                 cursor = Cursor(Cursor.HAND_CURSOR)
                 minimumSize = preferredSize
@@ -216,7 +280,7 @@ class ChatBubble(
                 cursor = Cursor(Cursor.HAND_CURSOR)
                 minimumSize = preferredSize
             })
-            add(IconLabelButton(AllIcons.Actions.More) { println("Clipboard clicked") }.apply {
+            add(IconLabelButton(AllIcons.Actions.More) { println("More clicked") }.apply {
                 cursor = Cursor(Cursor.HAND_CURSOR)
                 minimumSize = preferredSize
             })
@@ -246,12 +310,12 @@ class ChatBubble(
             return toolbarHeight + (lineHeight * visualLines * 1.5).toInt() + JBUI.scale(32)
         }
 
-        fun updateHeight() {
+        fun updateHeightLocal() {
             val newHeight = calcHeight()
             if (wrapper.preferredSize.height != newHeight) {
                 wrapper.minimumSize = Dimension(0, newHeight)
                 wrapper.preferredSize = Dimension(0, newHeight)
-                wrapper.maximumSize = Dimension(Int.MAX_VALUE, newHeight)
+                wrapper.maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
 
                 heightCallback(newHeight)
 
@@ -260,18 +324,18 @@ class ChatBubble(
             }
         }
 
-        updateHeight()
+        updateHeightLocal()
 
         editorComponent.addComponentListener(object : ComponentAdapter() {
             override fun componentResized(e: ComponentEvent) {
-                updateHeight()
+                updateHeightLocal()
             }
         })
 
         document.addDocumentListener(object : com.intellij.openapi.editor.event.DocumentListener {
             override fun documentChanged(event: com.intellij.openapi.editor.event.DocumentEvent) {
                 SwingUtilities.invokeLater {
-                    updateHeight()
+                    updateHeightLocal()
                 }
             }
         })

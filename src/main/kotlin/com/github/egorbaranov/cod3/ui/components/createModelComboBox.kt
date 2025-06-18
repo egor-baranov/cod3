@@ -21,6 +21,8 @@ import com.intellij.ui.popup.ActionPopupOptions
 import com.intellij.ui.popup.PopupFactoryImpl
 import com.intellij.ui.popup.list.PopupListElementRenderer
 import com.intellij.util.ui.JBUI
+import ee.carlrobert.llm.client.google.models.GoogleModel
+import ee.carlrobert.llm.client.openai.completion.OpenAIChatCompletionModel
 import java.awt.BorderLayout
 import java.awt.Color
 import javax.swing.Box
@@ -79,17 +81,7 @@ fun createModelComboBox(): JComponent {
                 Section.Group(
                     title = "OpenAI",
                     asElements = false,
-                    actions = listOf(
-                        "GPT-4.1",
-                        "GPT-4.1 mini",
-                        "GPT-4.1 nano",
-                        "O3-Mini",
-                        "O1-Preview",
-                        "O1-Mini",
-                        "GPT-4o",
-                        "GPT-4o-mini",
-                        "GPT-4o-0125 128k"
-                    ),
+                    actions = OpenAIChatCompletionModel.entries.map { it.name },
                     icon = Icons.OpenAI
                 ),
                 Section.Group(
@@ -101,13 +93,7 @@ fun createModelComboBox(): JComponent {
                 Section.Group(
                     title = "Google (Gemini)",
                     asElements = false,
-                    actions = listOf(
-                        "Gemini-2.5-Pro Preview",
-                        "Gemini-2.5-Flash Preview",
-                        "Gemini-2.0-Pro-Flash Thinking",
-                        "Gemini-2.0-Flash",
-                        "Gemini-1.5-Pro"
-                    ),
+                    actions = GoogleModel.entries.map { it.name },
                     icon = Icons.Google
                 ),
                 Section.Group(

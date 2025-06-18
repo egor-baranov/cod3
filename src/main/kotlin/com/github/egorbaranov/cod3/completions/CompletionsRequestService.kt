@@ -11,13 +11,14 @@ import ee.carlrobert.llm.completion.CompletionEventListener
 import ee.carlrobert.llm.completion.CompletionRequest
 import okhttp3.sse.EventSource
 
-class CompletionsRequestService(
-    private val settingsState: PluginSettingsState
-) {
+class CompletionsRequestService {
+
+    private val settingsState: PluginSettingsState = PluginSettingsState.getInstance()
+
 
     fun getChatCompletionAsync(
         request: CompletionRequest,
-        eventListener: CompletionEventListener<String?>?
+        eventListener: CompletionEventListener<String>
     ): EventSource {
         val completionClientProvider = CompletionClientProvider()
 

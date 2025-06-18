@@ -1,5 +1,8 @@
 package com.github.egorbaranov.cod3.toolWindow
 
+import com.github.egorbaranov.cod3.completions.CompletionsRequestService
+import com.github.egorbaranov.cod3.completions.factory.OpenAIRequestFactory
+import com.github.egorbaranov.cod3.completions.factory.UserMessage
 import com.github.egorbaranov.cod3.ui.components.RoundedTokenRenderer
 import com.github.egorbaranov.cod3.services.MyProjectService
 import com.github.egorbaranov.cod3.ui.Icons
@@ -42,6 +45,11 @@ import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import ee.carlrobert.llm.client.openai.completion.ErrorDetails
+import ee.carlrobert.llm.client.openai.completion.OpenAIChatCompletionModel
+import ee.carlrobert.llm.completion.CompletionEventListener
+import okhttp3.EventListener
+import okhttp3.sse.EventSource
 import scaledBy
 import java.awt.*
 import java.awt.event.KeyAdapter
@@ -50,6 +58,7 @@ import java.awt.event.MouseAdapter
 import java.awt.geom.Area
 import java.awt.geom.Rectangle2D
 import java.awt.geom.RoundRectangle2D
+import java.lang.StringBuilder
 import javax.swing.*
 import kotlin.text.startsWith
 
@@ -268,37 +277,66 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
     }
 
-    private fun sendMessage(referencePopupProvider: ReferencePopupProvider, messageContainer: JPanel, scroll: JBScrollPane) {
+    private fun sendMessage(
+        referencePopupProvider: ReferencePopupProvider,
+        messageContainer: JPanel,
+        scroll: JBScrollPane
+    ) {
         val text = referencePopupProvider.editorTextField.text.trim()
         if (text.isNotEmpty()) {
-            appendUserBubble(messageContainer, text)
             referencePopupProvider.editorTextField.text = ""
-            // simulate AI reply
-            appendAssistantBubble(messageContainer, """
-Here is Kotlin code that represents some functionality
-Also it is multiline:
+            appendUserBubble(messageContainer, text)
 
-```kotlin
-val scroll = JBScrollPane(messageContainer).apply {
-    verticalScrollBar.unitIncrement = JBUI.scale(16)
-}
+            val completionRequest = OpenAIRequestFactory.createBasicCompletionRequest(
+                model = OpenAIChatCompletionModel.GPT_4_O.code,
+                messages = listOf(
+                    UserMessage(text)
+                ),
+                isStream = true
+            )
 
-val sendButton = IconLabelButton(Icons.Send, {
-    val text = editorTextField.text.trim()
-    if (text.isNotEmpty()) {
-        appendUserBubble(messageContainer, text)
-        editorTextField.text = ""
-        // simulate AI reply
-        val reply = service.getRandomNumber().toString()
-    }
-})
-```
+            var cachedBubble: ChatBubble? = null
+            var text = ""
+            CompletionsRequestService().getChatCompletionAsync(
+                completionRequest,
+                object : CompletionEventListener<String> {
 
-This template provides some basic structure for a chat interface with a text editor and a send button. You can customize it further based on your requirements.
-""".trimIndent())
-            SwingUtilities.invokeLater {
-                scroll.verticalScrollBar.value = scroll.verticalScrollBar.maximum
-            }
+                    override fun onCancelled(messageBuilder: StringBuilder?) {
+                        println("on cancelled")
+                    }
+
+                    override fun onComplete(messageBuilder: StringBuilder?) {
+                        println("on completed")
+                    }
+
+                    override fun onOpen() {
+                        println("On open")
+                    }
+
+                    override fun onMessage(message: String?, rawMessage: String?, eventSource: EventSource?) {
+                        println("on message: $message")
+                        if (message != null && message.isNotEmpty()) {
+                            text += message
+                            if (cachedBubble != null) {
+                                cachedBubble?.updateText(text)
+                            } else {
+                                cachedBubble = appendAssistantBubble(messageContainer, message)
+                            }
+                        }
+                    }
+
+                    override fun onError(error: ErrorDetails?, ex: Throwable?) {
+                        println("on error: $error, $ex")
+                    }
+
+                    override fun onEvent(data: String) {
+                        println("got data: $data")
+//                        SwingUtilities.invokeLater {
+//                            scroll.verticalScrollBar.value = scroll.verticalScrollBar.maximum
+//                        }
+                    }
+                }
+            )
         }
     }
 
@@ -308,10 +346,11 @@ This template provides some basic structure for a chat interface with a text edi
         refresh(container)
     }
 
-    private fun appendAssistantBubble(container: JPanel, text: String) {
+    private fun appendAssistantBubble(container: JPanel, text: String): ChatBubble {
         val bubble = createBubble(text, UIUtil.getPanelBackground(), assistant = true)
         container.add(wrapHorizontal(bubble, Alignment.LEFT))
         refresh(container)
+        return bubble as ChatBubble
     }
 
     private fun historyBubble(text: String): JComponent {
@@ -323,10 +362,16 @@ This template provides some basic structure for a chat interface with a text edi
                 JOptionPane.showMessageDialog(null, "Rename clicked for: $text")
             }
         }
+
         class DeleteAction : AnAction("Delete", "Delete chat", Icons.Trash) {
             override fun actionPerformed(e: AnActionEvent) {
                 // TODO: implement delete logic
-                val result = JOptionPane.showConfirmDialog(null, "Delete this item?", "Confirm Delete", JOptionPane.YES_NO_OPTION)
+                val result = JOptionPane.showConfirmDialog(
+                    null,
+                    "Delete this item?",
+                    "Confirm Delete",
+                    JOptionPane.YES_NO_OPTION
+                )
                 if (result == JOptionPane.YES_OPTION) {
                     // perform deletion
                 }

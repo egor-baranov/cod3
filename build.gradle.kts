@@ -34,6 +34,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 //    implementation("io.modelcontextprotocol:kotlin-sdk:latest")
     implementation("ee.carlrobert:llm-client:0.8.43")
+    implementation("com.knuddels:jtokkit:1.1.0")
     testImplementation(libs.junit)
     testImplementation(libs.opentest4j)
 
