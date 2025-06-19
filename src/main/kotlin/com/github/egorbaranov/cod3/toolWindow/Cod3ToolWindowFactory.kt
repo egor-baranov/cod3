@@ -3,30 +3,16 @@ package com.github.egorbaranov.cod3.toolWindow
 import com.github.egorbaranov.cod3.completions.CompletionsRequestService
 import com.github.egorbaranov.cod3.completions.factory.OpenAIRequestFactory
 import com.github.egorbaranov.cod3.completions.factory.UserMessage
-import com.github.egorbaranov.cod3.ui.components.RoundedTokenRenderer
-import com.github.egorbaranov.cod3.services.MyProjectService
 import com.github.egorbaranov.cod3.ui.Icons
-import com.github.egorbaranov.cod3.ui.components.ChatBubble
-import com.github.egorbaranov.cod3.ui.components.ReferencePopupProvider
-import com.github.egorbaranov.cod3.ui.components.RoundedBorder
-import com.github.egorbaranov.cod3.ui.components.RoundedTokenLabel
-import com.github.egorbaranov.cod3.ui.components.ScrollableSpacedPanel
-import com.github.egorbaranov.cod3.ui.components.TemplatePopupComponent
-import com.github.egorbaranov.cod3.ui.components.TokenChip
-import com.github.egorbaranov.cod3.ui.components.createComboBox
-import com.github.egorbaranov.cod3.ui.components.createModelComboBox
+import com.github.egorbaranov.cod3.ui.components.*
 import com.github.egorbaranov.cod3.ui.createResizableEditor
 import com.intellij.icons.AllIcons
 import com.intellij.ide.actions.ShowSettingsUtilImpl
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.actionSystem.impl.ActionButton
-import com.intellij.openapi.components.service
-import com.intellij.openapi.editor.event.DocumentEvent
-import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.SimpleToolWindowPanel
-import com.intellij.openapi.ui.addKeyboardAction
-import com.intellij.openapi.ui.popup.*
+import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
@@ -37,6 +23,7 @@ import com.intellij.ui.components.IconLabelButton
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
 import com.intellij.ui.dsl.builder.Align
@@ -48,19 +35,13 @@ import com.intellij.util.ui.UIUtil
 import ee.carlrobert.llm.client.openai.completion.ErrorDetails
 import ee.carlrobert.llm.client.openai.completion.OpenAIChatCompletionModel
 import ee.carlrobert.llm.completion.CompletionEventListener
-import okhttp3.EventListener
 import okhttp3.sse.EventSource
 import scaledBy
 import java.awt.*
-import java.awt.event.KeyAdapter
-import java.awt.event.KeyEvent
-import java.awt.event.MouseAdapter
 import java.awt.geom.Area
 import java.awt.geom.Rectangle2D
 import java.awt.geom.RoundRectangle2D
-import java.lang.StringBuilder
 import javax.swing.*
-import kotlin.text.startsWith
 
 class Cod3ToolWindowFactory : ToolWindowFactory {
 
@@ -170,13 +151,15 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
 
     private fun createChatPanel(project: Project, referencePopupProvider: ReferencePopupProvider): JComponent {
-        val messageContainer = JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        val messageContainer = JBPanel<JBPanel<*>>(VerticalLayout(JBUI.scale(8))).apply {
             border = JBUI.Borders.empty(4)
+
         }
 
         val scroll = JBScrollPane(messageContainer).apply {
             verticalScrollBar.unitIncrement = JBUI.scale(16)
+            verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
+            horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
         }
 
         val sendButton = IconLabelButton(Icons.Send, {
@@ -342,13 +325,13 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
     private fun appendUserBubble(container: JPanel, text: String) {
         val bubble = createBubble(text, JBColor.LIGHT_GRAY)
-        container.add(wrapHorizontal(bubble, Alignment.RIGHT))
+        container.add(bubble)
         refresh(container)
     }
 
     private fun appendAssistantBubble(container: JPanel, text: String): ChatBubble {
         val bubble = createBubble(text, UIUtil.getPanelBackground(), assistant = true)
-        container.add(wrapHorizontal(bubble, Alignment.LEFT))
+        container.add(bubble)
         refresh(container)
         return bubble as ChatBubble
     }
@@ -455,25 +438,6 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         return ChatBubble(text, bg, assistant)
     }
 
-    private fun wrapHorizontal(comp: JComponent, alignment: Alignment): JComponent {
-        val wrapper = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.X_AXIS)
-            isOpaque = false
-            border = JBUI.Borders.emptyTop(4)
-        }
-        when (alignment) {
-            Alignment.RIGHT -> {
-                wrapper.add(Box.createHorizontalGlue())
-                wrapper.add(comp)
-            }
-
-            Alignment.LEFT -> {
-                wrapper.add(comp)
-                wrapper.add(Box.createHorizontalGlue())
-            }
-        }
-        return wrapper
-    }
 
     private fun refresh(container: JPanel) {
         container.revalidate()

@@ -2,6 +2,7 @@ package com.github.egorbaranov.cod3.ui.components
 
 import com.github.egorbaranov.cod3.ui.Icons
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.ex.EditorEx
@@ -10,6 +11,7 @@ import com.intellij.openapi.fileTypes.PlainTextFileType
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.IconLabelButton
+import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.util.ui.JBUI
 import scaledBy
 import java.awt.*
@@ -28,28 +30,36 @@ class ChatBubble(
     private var currentText: String = initialText
     private val contentPanel: JPanel
 
+    data class Block(
+        val text: String,
+        val type: BlockType,
+        val language: String? = null
+    ) {
+        enum class BlockType {
+            TEXT, CODE
+        }
+    }
+
     init {
         isOpaque = false
         background = bg
 
         // Initialize contentPanel
-        contentPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        contentPanel = JPanel(VerticalLayout(JBUI.scale(8))).apply {
             border = JBUI.Borders.empty(8, if (isAssistant) 4 else 12)
             isOpaque = false
             alignmentX = Component.LEFT_ALIGNMENT
-            maximumSize = Dimension(preferredSize.width, preferredSize.height)
         }
 
         // Populate initial content and adjust height
-        rebuildContentAndAdjustHeight()
+        SwingUtilities.invokeLater {
+            rebuildContentAndAdjustHeight()
+        }
         add(contentPanel, BorderLayout.CENTER)
 
-//        if (isAssistant) {
-//            add(createAssistantToolbar(), BorderLayout.SOUTH)
-//        }
-
-        maximumSize = Dimension(preferredSize.width, preferredSize.height)
+        if (isAssistant) {
+            add(createAssistantToolbar(), BorderLayout.SOUTH)
+        }
     }
 
     /**
@@ -57,24 +67,10 @@ class ChatBubble(
      */
     fun updateText(newText: String) {
         if (newText == currentText || newText.length < currentText.length) return
-        // Release existing editors
-
-        val factory = EditorFactory.getInstance()
-        for (editor in createdEditors) {
-            factory.releaseEditor(editor)
-        }
-        createdEditors.clear()
-
-        // Update text
         currentText = newText
-
-        // Clear previous components
-        contentPanel.removeAll()
-
-        // Rebuild content and adjust height
-        rebuildContentAndAdjustHeight()
-
-        // Revalidate and repaint to apply changes
+        SwingUtilities.invokeLater {
+            rebuildContentAndAdjustHeight()
+        }
         revalidate()
         repaint()
     }
@@ -83,36 +79,34 @@ class ChatBubble(
      * Rebuilds contentPanel based on currentText and adjusts height.
      */
     private fun rebuildContentAndAdjustHeight() {
-        val components = parseMarkdownContent(currentText) { newHeight ->
-            // Editor-specific height changes: recalc full content height
-            SwingUtilities.invokeLater { adjustHeightToContent() }
-        }
-        contentPanel.removeAll()
-        components.forEachIndexed { idx, comp ->
-            comp.alignmentX = LEFT_ALIGNMENT
-            contentPanel.add(comp)
-            if (idx < components.size - 1) {
-                contentPanel.add(Box.createVerticalStrut(JBUI.scale(8)))
+        val components = contentPanel.components
+
+        val blocks = parseMarkdown(currentText)
+
+        println("blocks: ${blocks.map { "${it.type}, ${it.text}" }}")
+        if (blocks.size > components.size) {
+            blocks.takeLast(blocks.size - components.size)
+                .map { blockToComponent(blocks.last()) }
+                .forEachIndexed { idx, it ->
+                    if (idx < (blocks.size - components.size) - 1) {
+                        contentPanel.add(Box.createVerticalStrut(JBUI.scale(8)))
+                    }
+
+                    contentPanel.add(it)
+                }
+        } else {
+            val lastBlock = blocks.last()
+            if (lastBlock.type == Block.BlockType.TEXT) {
+                (components.last() as JTextArea).text = lastBlock.text
+            } else {
+                val lastEditor = createdEditors.last()
+                println("set text to editor: $lastEditor: ${lastBlock.text}")
+
+                WriteCommandAction.runWriteCommandAction(lastEditor.project) {
+                    createdEditors.last().document.setText(lastBlock.text)
+                }
             }
         }
-        // After adding components, ensure layout and update height even if no editors
-        SwingUtilities.invokeLater { adjustHeightToContent() }
-    }
-
-    /**
-     * Adjusts the ChatBubble height based on total contentPanel children heights.
-     */
-    private fun adjustHeightToContent() {
-        // Sum heights of each component and struts in contentPanel
-        var total = 0
-        for (i in 0 until contentPanel.componentCount) {
-            val comp = contentPanel.getComponent(i)
-            val pref = comp.preferredSize
-            total += pref.height
-        }
-        // total now includes children heights; padding: contentPanel border adds 8 top and bottom
-        // updateHeight expects content height without padding, and will add JBUI.scale(16)
-        updateHeight(total)
     }
 
     /**
@@ -172,59 +166,44 @@ class ChatBubble(
         super.removeNotify()
     }
 
-    private fun parseMarkdownContent(markdown: String, heightCallback: (Int) -> Unit): List<JComponent> {
-        val result = mutableListOf<JComponent>()
-        val codeRegex = Regex("```(\\w+)?\\s*\\n([\\s\\S]*?)\\n?```", RegexOption.MULTILINE)
-        var lastIndex = 0
+    private fun parseMarkdown(markdown: String): List<Block> {
+        var code = markdown.startsWith("```")
+        val result = mutableListOf<Block>()
 
-        for (match in codeRegex.findAll(markdown)) {
-            val langTag = match.groups[1]?.value?.trim()
-            val codeBlock = match.groups[2]?.value?.trimEnd() ?: ""
-
-            if (match.range.first > lastIndex) {
-                val plainText = markdown.substring(lastIndex, match.range.first).trim()
-                if (plainText.isNotEmpty()) {
-                    result.add(createLabelComponent(plainText))
+        for (block in markdown.split("```")) {
+            result.add(
+                Block(
+                    block.trim().let {
+                        if (code) it.lines().drop(1).joinToString("\n").removeSuffix("\n``")
+                        else it
+                    },
+                    if (code) Block.BlockType.CODE else Block.BlockType.TEXT,
+                    language = block.lines().firstOrNull()?.takeIf { code }).also { v ->
+                        println("language: $v")
                 }
-            }
-
-            result.add(createEditorComponent(codeBlock, langTag, heightCallback))
-            lastIndex = match.range.last + 1
-        }
-
-        if (lastIndex < markdown.length) {
-            val remainingText = markdown.substring(lastIndex).trim()
-            if (remainingText.isNotEmpty()) {
-                result.add(createLabelComponent(remainingText))
-            }
+            )
+            code = !code
         }
 
         return result
     }
 
-    private fun createLabelComponent(text: String): JTextArea {
-        val escaped = text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\n", "<br>")
-        val html = "<html>$escaped</html>"
+    private fun blockToComponent(block: Block): JComponent {
+        return if (block.type == Block.BlockType.TEXT) {
+            createLabelComponent(block.text)
+        } else {
+            createEditorComponent(block.text, block.language, {})
+        }
+    }
 
-        return JTextArea().apply {
-            this.text = text
-            this.isOpaque = false
-            this.lineWrap = true
-            this.wrapStyleWord = true
+    private fun createLabelComponent(text: String): JTextArea {
+        return JTextArea(text).apply {
+            lineWrap = true
+            wrapStyleWord = true
+            isOpaque = false
+            isEditable = false
             alignmentX = LEFT_ALIGNMENT
             foreground = if (isDarkBackground(background)) Color.WHITE else Color.BLACK
-
-            val fm = getFontMetrics(font)
-            val lines = text.lines().size + 1
-            val height = fm.height * lines
-
-//            minimumSize = Dimension(0, height)
-//            preferredSize = Dimension(0, height)
-//            maximumSize = Dimension(Int.MAX_VALUE, height)
         }
     }
 
@@ -307,7 +286,7 @@ class ChatBubble(
             val toolbarHeight = toolbar.preferredSize.height
 
             // Total height = toolbar height + editor lines height + padding
-            return toolbarHeight + (lineHeight * visualLines * 1.5).toInt() + JBUI.scale(32)
+            return toolbarHeight + (lineHeight * visualLines * 1.3).toInt()
         }
 
         fun updateHeightLocal() {
@@ -315,7 +294,7 @@ class ChatBubble(
             if (wrapper.preferredSize.height != newHeight) {
                 wrapper.minimumSize = Dimension(0, newHeight)
                 wrapper.preferredSize = Dimension(0, newHeight)
-                wrapper.maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
+                wrapper.maximumSize = Dimension(Int.MAX_VALUE, newHeight)
 
                 heightCallback(newHeight)
 
