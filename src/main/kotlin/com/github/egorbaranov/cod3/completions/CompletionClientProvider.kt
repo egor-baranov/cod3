@@ -19,7 +19,6 @@ class CompletionClientProvider(
         OpenAIClient.Builder(settings.openAIApiKey)
             .setHost(settings.openAIApiUrl)
             .build(getDefaultClientBuilder())
-
     fun getGoogleClient(): GoogleClient =
         GoogleClient.Builder(settings.googleApiKey)
             .setHost(settings.googleApiUrl)

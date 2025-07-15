@@ -1,6 +1,8 @@
 package com.github.egorbaranov.cod3.toolWindow
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.github.egorbaranov.cod3.completions.CompletionsRequestService
+import com.github.egorbaranov.cod3.completions.factory.AssistantMessage
 import com.github.egorbaranov.cod3.completions.factory.OpenAIRequestFactory
 import com.github.egorbaranov.cod3.completions.factory.UserMessage
 import com.github.egorbaranov.cod3.ui.Icons
@@ -10,10 +12,15 @@ import com.intellij.icons.AllIcons
 import com.intellij.ide.actions.ShowSettingsUtilImpl
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.actionSystem.impl.ActionButton
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.SimpleToolWindowPanel
 import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.util.Key
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ex.ToolWindowEx
@@ -34,6 +41,7 @@ import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import ee.carlrobert.llm.client.openai.completion.ErrorDetails
 import ee.carlrobert.llm.client.openai.completion.OpenAIChatCompletionModel
+import ee.carlrobert.llm.client.openai.completion.request.OpenAIChatCompletionStandardMessage
 import ee.carlrobert.llm.completion.CompletionEventListener
 import okhttp3.sse.EventSource
 import scaledBy
@@ -41,6 +49,8 @@ import java.awt.*
 import java.awt.geom.Area
 import java.awt.geom.Rectangle2D
 import java.awt.geom.RoundRectangle2D
+import java.io.File
+import java.nio.file.Paths
 import javax.swing.*
 
 class Cod3ToolWindowFactory : ToolWindowFactory {
@@ -49,7 +59,8 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     private var lookupPopup: JBPopup? = null
     private val list = JBList(listOf("Files & Folders", "Code", "Docs", "Git", "Web", "Recent Changes"))
 
-    var chatIndex = 1
+    var chatQuantity = 1
+    val messages = mutableMapOf<Int, MutableList<OpenAIChatCompletionStandardMessage>>()
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         toolWindow.title = "Cod3"
@@ -90,12 +101,14 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
         val referencePopupProvider = ReferencePopupProvider(editorTextField, contextReferencePanel)
         // Build the chat panel, passing these fresh components:
+        chatQuantity++
+
         val panel = SimpleToolWindowPanel(true, true).apply {
-            setContent(createChatPanel(project, referencePopupProvider))
+            setContent(createChatPanel(project, chatQuantity, referencePopupProvider))
         }
 
         val content: Content = ContentFactory.getInstance()
-            .createContent(panel, "Chat ${chatIndex++}", /* isLockable= */ false)
+            .createContent(panel, "Chat $chatQuantity", /* isLockable= */ false)
             .apply {
                 isCloseable = true
                 setShouldDisposeContent(true)
@@ -137,7 +150,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
             verticalScrollBar.unitIncrement = JBUI.scale(16)
         }
 
-        for (i in 1..chatIndex) {
+        for (i in 1..chatQuantity) {
             messageContainer.add(historyBubble("Chat $i"))
             messageContainer.add(Box.createVerticalStrut(8))
         }
@@ -150,7 +163,11 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     }
 
 
-    private fun createChatPanel(project: Project, referencePopupProvider: ReferencePopupProvider): JComponent {
+    private fun createChatPanel(
+        project: Project,
+        chatIndex: Int,
+        referencePopupProvider: ReferencePopupProvider
+    ): JComponent {
         val messageContainer = JBPanel<JBPanel<*>>(VerticalLayout(JBUI.scale(8))).apply {
             border = JBUI.Borders.empty(4)
 
@@ -163,7 +180,14 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
 
         val sendButton = IconLabelButton(Icons.Send, {
-            sendMessage(referencePopupProvider, messageContainer, scroll)
+            sendMessage(
+                project,
+                chatIndex,
+                referencePopupProvider.editorTextField.text.trim(),
+                referencePopupProvider,
+                messageContainer,
+                scroll
+            )
         }).apply {
             minimumSize = Dimension(24, 24)
             preferredSize = Dimension(24, 24)
@@ -261,25 +285,48 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     }
 
     private fun sendMessage(
+        project: Project,
+        chatIndex: Int,
+        text: String?,
         referencePopupProvider: ReferencePopupProvider,
         messageContainer: JPanel,
         scroll: JBScrollPane
     ) {
-        val text = referencePopupProvider.editorTextField.text.trim()
-        if (text.isNotEmpty()) {
-            referencePopupProvider.editorTextField.text = ""
-            appendUserBubble(messageContainer, text)
+        if (text == null || text.isNotEmpty()) {
+            ApplicationManager.getApplication().invokeLater {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    referencePopupProvider.editorTextField.text = ""
+                }
+            }
+
+            if (text != null) {
+                appendUserBubble(messageContainer, text)
+            }
+
+            if (messages[chatIndex] == null) {
+                messages.put(chatIndex, mutableListOf())
+            }
+
+            if (text != null) {
+                messages[chatIndex]?.add(UserMessage(text))
+            }
+
+            println("messages are: $messages")
+
+            println("send request with messages: ${messages[chatIndex]}")
 
             val completionRequest = OpenAIRequestFactory.createBasicCompletionRequest(
-                model = OpenAIChatCompletionModel.GPT_4_O.code,
-                messages = listOf(
-                    UserMessage(text)
-                ),
-                isStream = true
+                model = OpenAIChatCompletionModel.GPT_4_1.code,
+                messages = messages[chatIndex].orEmpty(),
+                isStream = true,
+                overridenPath = ""
             )
 
             var cachedBubble: ChatBubble? = null
             var text = ""
+            val tools: MutableList<ToolCall> = mutableListOf()
+
+            println("sending completion request: ${ObjectMapper().writeValueAsString(completionRequest)}")
             CompletionsRequestService().getChatCompletionAsync(
                 completionRequest,
                 object : CompletionEventListener<String> {
@@ -290,6 +337,30 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
                     override fun onComplete(messageBuilder: StringBuilder?) {
                         println("on completed")
+                        messages[chatIndex]?.add(AssistantMessage(text))
+
+                        for (tool in tools) {
+                            cachedBubble = null
+                            text = ""
+
+                            val messageText = processToolCall(project, tool) ?: continue
+                            messages[chatIndex]?.add(UserMessage(messageText))
+                            appendUserBubble(
+                                messageContainer,
+                                messageText
+                            )
+                        }
+
+                        if (tools.isNotEmpty()) {
+                            sendMessage(
+                                project,
+                                chatIndex,
+                                null,
+                                referencePopupProvider,
+                                messageContainer,
+                                scroll
+                            )
+                        }
                     }
 
                     override fun onOpen() {
@@ -313,13 +384,274 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                     }
 
                     override fun onEvent(data: String) {
-                        println("got data: $data")
-//                        SwingUtilities.invokeLater {
-//                            scroll.verticalScrollBar.value = scroll.verticalScrollBar.maximum
-//                        }
+                        println("got event: $data")
+                        try {
+                            val (content, toolCalls) = SSEParser.parse(data)
+
+                            when (content) {
+                                is Content.PlanContent -> {
+                                    println("💡 Received plan: ${content.plan.taskTitle}")
+                                    println("Steps: ${content.plan.steps.joinToString()}")
+
+                                    text += content.plan.taskTitle + "\n" + content.plan.steps.joinToString() + "\n"
+                                    if (cachedBubble != null) {
+                                        cachedBubble?.updateText(text)
+                                    } else {
+                                        cachedBubble = appendAssistantBubble(messageContainer, text)
+                                    }
+                                }
+
+                                is Content.TextContent -> {
+                                    text += content.text
+                                    if (cachedBubble != null) {
+                                        cachedBubble?.updateText(text)
+                                    } else {
+                                        cachedBubble = appendAssistantBubble(messageContainer, text)
+                                    }
+
+                                    println("✏️  Assistant says: ${content.text}")
+                                }
+
+                                else -> {
+                                    println("⚠️  No content in this event")
+                                }
+                            }
+
+                            toolCalls?.let {
+                                println("🔧 Tool calls:")
+                                val toolCall = it.firstOrNull() ?: return@let
+
+                                if (tools.isEmpty()) {
+                                    tools.add(
+                                        ToolCall(
+                                            name = toolCall.name.takeIf { it != "null" },
+                                            arguments = toolCall.arguments
+                                        )
+                                    )
+                                } else {
+                                    tools[tools.size - 1] = tools[tools.size - 1].let {
+                                        ToolCall(
+                                            name = it.name.orEmpty(),
+                                            arguments = it.arguments.orEmpty() + toolCall.arguments.orEmpty()
+                                        )
+                                    }
+                                }
+
+                                it.forEach { tc ->
+                                    println(" - ${tc.name}(${tc.arguments})")
+                                }
+                            } ?: run {
+                                for (tool in tools) {
+                                    text += "\n\nTool call: " + tool.name.orEmpty() + "(" + tool.arguments.orEmpty() + ")\n\n"
+                                    appendUserBubble(
+                                        messageContainer,
+                                        tool.name.orEmpty() + "(" + tool.arguments.orEmpty() + ")"
+                                    )
+                                    cachedBubble = null
+                                    text = ""
+
+                                    val toolResult = processToolCall(project, tool) ?: return
+                                    sendMessage(
+                                        project,
+                                        chatIndex,
+                                        toolResult,
+                                        referencePopupProvider,
+                                        messageContainer,
+                                        scroll
+                                    )
+                                }
+
+                                tools.clear()
+                            }
+
+                        } catch (e: Exception) {
+                            println("❌ Failed to parse SSE JSON for data $data: ${e.stackTraceToString()}")
+                        }
                     }
                 }
             )
+        }
+    }
+
+    private fun processToolCall(project: Project, toolCall: ToolCall): String? {
+        val name = toolCall.name ?: return null
+        val args = toolCall.arguments ?: emptyMap()
+        println("processing a tool call: $toolCall")
+
+        return try {
+            when (name) {
+                "write_file" -> {
+                    val pathString = args["path"] ?: error("missing path")
+                    val content = args["content"] ?: error("missing content")
+
+                    // Normalize to system‐independent path
+                    val path = Paths.get(project.basePath!!)
+                        .resolve(pathString.trimStart('/', '\\'))
+                        .toAbsolutePath()
+                    val parentPath = path.parent.toAbsolutePath().toString()
+                    val fileName = path.fileName.toString()
+
+                    // Ensure the parent directory exists on disk
+                    println("parent path: $parentPath, path: $path")
+                    File(parentPath).apply { if (!exists()) mkdirs() }
+
+                    lateinit var createdVFile: com.intellij.openapi.vfs.VirtualFile
+
+                    WriteCommandAction.runWriteCommandAction(project) {
+                        // Locate (or refresh) the parent directory in the VFS
+                        val parentVDir = LocalFileSystem.getInstance()
+                            .refreshAndFindFileByPath(parentPath)
+                            ?: error("Could not find or create VFS directory: $parentPath")
+
+                        // find or create the file
+                        createdVFile = parentVDir.findChild(fileName)
+                            ?: parentVDir.createChildData(this, fileName)
+                        // write the text (this also handles line‐endings, encoding, etc.)
+                        VfsUtil.saveText(createdVFile, content)
+                    }
+
+                    ApplicationManager.getApplication().invokeLater {
+                        FileEditorManager.getInstance(project)
+                            .openFile(createdVFile, true)
+                    }
+
+                    println("✅ Wrote $pathString")
+                    "Successfully wrote file in path=$pathString"
+                }
+
+
+                "edit_file" -> {
+                    val path = args["path"] ?: error("missing path")
+                    val edits = args["edits"] ?: error("missing edits")
+                    val filePath = Paths.get(project.basePath!!)
+                        .resolve(path.trimStart('/', '\\'))
+                        .toAbsolutePath()
+                    val file = File(filePath.toString())
+
+                    if (!file.exists()) error("file not found: $path")
+                    file.appendText("\n$edits")
+                    println("Edited file in path=$path")
+                    "Successfully edited $path"
+                }
+
+
+                "find" -> {
+                    val rawPattern = args["pattern"] ?: error("missing pattern")   // now a real regex
+                    val basePath    = project.basePath
+                        ?: error("missing Project basePath")
+                    val baseDir     = Paths.get(basePath)
+
+                    // Compile the user’s pattern into a Kotlin Regex.
+                    // RegexOption.IGNORE_CASE is optional—remove if you want strict case.
+                    val regex = rawPattern.toRegex(RegexOption.IGNORE_CASE)
+
+                    val matches = File(basePath).walk()
+                        .filter { it.isFile }
+                        .map { file ->
+                            // path relative to project root, with forward slashes
+                            baseDir.relativize(file.toPath()).toString().replace("\\", "/")
+                        }
+                        .filter { relPath ->
+                            // true if the regex finds a match anywhere in the relative path
+                            regex.find(relPath) != null
+                        }
+                        .toList()
+
+                    println("🔍 find results for regex /$rawPattern/ in project '$basePath':")
+                    matches.forEach { println(" - $it") }
+
+                    "Successfully found ${matches.size} result(s) for regex /$rawPattern/ in project:\n" +
+                            matches.joinToString("\n") { " - /$it" }
+                }
+
+                "codebase_search" -> {
+                    val query = args["query"] ?: error("missing query")
+                    val topK = args["top_k"]?.toIntOrNull() ?: 5
+                    // Stub: in real life you'd call your semantic‐search index here
+                    println("💡 (stub) searching codebase for '$query' (top $topK)")
+                    "Successfully searched codebase for '$query' (top $topK) and found results: "
+                }
+
+                "list_directory" -> {
+                    val dirArg = args["directory"].orEmpty()
+
+                    val projectBasePath = project.basePath ?: error("Project base path not available")
+                    val dir = File(projectBasePath, dirArg).canonicalFile
+
+                    if (!dir.isDirectory) error("$dir is not a directory")
+
+                    val children = dir.listFiles() ?: emptyArray()
+                    println("📁 listing '${dir.relativeTo(File(projectBasePath))}':")
+                    children.forEach {
+                        val type = if (it.isDirectory) "dir" else "file"
+                        println(" - [$type] ${it.name} (${it.length()} bytes)")
+                    }
+
+                    "Successfully listed directory '${dir.relativeTo(File(projectBasePath))}' with contents:\n${
+                        children.map {
+                            it.relativeTo(
+                                File(
+                                    projectBasePath
+                                )
+                            )
+                        }.joinToString("\n")
+                    }"
+                }
+
+
+                "grep_search" -> {
+                    val pattern = args["pattern"] ?: error("missing pattern")
+                    val path = args["path"] ?: error("missing path")
+                    val recursive = args["recursive"]?.toBoolean() ?: true
+                    val regex = pattern.toRegex()
+                    val direction = if (recursive) FileWalkDirection.TOP_DOWN else FileWalkDirection.BOTTOM_UP
+
+                    File(path).walk(direction).forEach { file ->
+                        if (file.isFile) {
+                            file.readLines().forEachIndexed { idx, line ->
+                                if (regex.containsMatchIn(line)) {
+                                    println("🧪 ${file.path}:${idx + 1}: $line")
+                                }
+                            }
+                        }
+                    }
+
+                    "Successfully provided grep search results for '$pattern' in '$path' (recursive=$recursive):"
+                }
+
+                "view_code_item" -> {
+                    val item = args["item_name"] ?: error("missing item_name")
+                    val path = args["path"] ?: error("missing path")
+                    val v = File(path).useLines { lines ->
+                        val snippet = lines
+                            .dropWhile { !it.contains("fun $item") && !it.contains("class $item") }
+                            .takeWhile { !it.startsWith("}") }
+                            .joinToString("\n")
+                        println("$item in $path:\n$snippet")
+                        return@useLines snippet
+                    }
+
+                    "Successfully viewed code item $item in $path:\n$v"
+                }
+
+                "view_file" -> {
+                    val path = args["path"] ?: error("missing path")
+                    val filePath = Paths.get(project.basePath!!)
+                        .resolve(path.trimStart('/', '\\'))
+                        .toAbsolutePath()
+                    val file = File(filePath.toString())
+                    if (!file.exists()) error("file not found: $path")
+                    println("📄 contents of $path:\n${file.readText()}")
+                    "Successfully viewed contents of $path:\n${file.readText()}"
+                }
+
+                else -> {
+                    println("⚠️ Unknown tool: $name")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            return  "Error executing tool: ${e.message}"
         }
     }
 

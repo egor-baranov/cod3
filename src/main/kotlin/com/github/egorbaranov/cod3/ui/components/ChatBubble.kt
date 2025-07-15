@@ -57,7 +57,7 @@ class ChatBubble(
         }
         add(contentPanel, BorderLayout.CENTER)
 
-        if (isAssistant) {
+        if (isAssistant && false) {
             add(createAssistantToolbar(), BorderLayout.SOUTH)
         }
     }

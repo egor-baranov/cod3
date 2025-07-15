@@ -11,12 +11,16 @@ class OpenAIRequestFactory {
         fun createBasicCompletionRequest(
             messages: List<OpenAIChatCompletionStandardMessage>,
             model: String? = null,
-            isStream: Boolean = false
+            isStream: Boolean = false,
+            overridenPath: String? = null
         ): OpenAIChatCompletionRequest {
             return OpenAIChatCompletionRequest
                 .Builder(messages)
                 .setModel(model)
                 .setStream(isStream)
+                .let {
+                    if (overridenPath != null) it.setOverriddenPath(overridenPath) else it
+                }
                 .build()
         }
     }
@@ -25,4 +29,4 @@ class OpenAIRequestFactory {
 
 data class SystemMessage(val text: String) : OpenAIChatCompletionStandardMessage("system", text)
 data class UserMessage(val text: String) : OpenAIChatCompletionStandardMessage("user", text)
-data class AssistantUser(val text: String) : OpenAIChatCompletionStandardMessage("assistant", text)
+data class AssistantMessage(val text: String) : OpenAIChatCompletionStandardMessage("assistant", text)
