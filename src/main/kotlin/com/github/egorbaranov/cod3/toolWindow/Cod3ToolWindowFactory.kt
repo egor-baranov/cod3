@@ -46,6 +46,7 @@ import ee.carlrobert.llm.completion.CompletionEventListener
 import okhttp3.sse.EventSource
 import scaledBy
 import java.awt.*
+import java.awt.Component.LEFT_ALIGNMENT
 import java.awt.geom.Area
 import java.awt.geom.Rectangle2D
 import java.awt.geom.RoundRectangle2D
@@ -343,7 +344,12 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                             cachedBubble = null
                             text = ""
 
-                            val messageText = processToolCall(project, tool) ?: continue
+                            val messageText = try {
+                                processToolCall(project, tool, messageContainer) ?: continue
+                            } catch (e: Exception) {
+                                "Error executing tool: ${e.message}"
+                            }
+
                             messages[chatIndex]?.add(UserMessage(messageText))
                             appendUserBubble(
                                 messageContainer,
@@ -450,7 +456,12 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                                     cachedBubble = null
                                     text = ""
 
-                                    val toolResult = processToolCall(project, tool) ?: return
+                                    val toolResult = try {
+                                        processToolCall(project, tool, messageContainer) ?: return
+                                    } catch (e: Exception) {
+                                        "Error executing tool: ${e.message}"
+                                    }
+
                                     sendMessage(
                                         project,
                                         chatIndex,
@@ -473,13 +484,12 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
     }
 
-    private fun processToolCall(project: Project, toolCall: ToolCall): String? {
+    private fun processToolCall(project: Project, toolCall: ToolCall, container: JPanel): String? {
         val name = toolCall.name ?: return null
         val args = toolCall.arguments ?: emptyMap()
         println("processing a tool call: $toolCall")
 
-        return try {
-            when (name) {
+        return when (name) {
                 "write_file" -> {
                     val pathString = args["path"] ?: error("missing path")
                     val content = args["content"] ?: error("missing content")
@@ -537,9 +547,9 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
                 "find" -> {
                     val rawPattern = args["pattern"] ?: error("missing pattern")   // now a real regex
-                    val basePath    = project.basePath
+                    val basePath = project.basePath
                         ?: error("missing Project basePath")
-                    val baseDir     = Paths.get(basePath)
+                    val baseDir = Paths.get(basePath)
 
                     // Compile the user’s pattern into a Kotlin Regex.
                     // RegexOption.IGNORE_CASE is optional—remove if you want strict case.
@@ -559,6 +569,14 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
                     println("🔍 find results for regex /$rawPattern/ in project '$basePath':")
                     matches.forEach { println(" - $it") }
+
+                    container.addCustomBubble(JPanel(VerticalLayout(8)).also {
+                        for (match in matches) {
+                            container.add(createBubble(match, JBColor.LIGHT_GRAY))
+                        }
+
+                        refresh(container)
+                    })
 
                     "Successfully found ${matches.size} result(s) for regex /$rawPattern/ in project:\n" +
                             matches.joinToString("\n") { " - /$it" }
@@ -650,9 +668,30 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                     null
                 }
             }
-        } catch (e: Exception) {
-            return  "Error executing tool: ${e.message}"
+    }
+
+    private fun JPanel.addCustomBubble(component: JPanel) {
+        val container = this
+        val bubble = object : JPanel(BorderLayout()) {
+            init {
+                background = JBColor.LIGHT_GRAY
+                this.add(component)
+            }
+
+            override fun paintComponent(g: Graphics) {
+                val g2 = g.create() as Graphics2D
+                try {
+                    g2.color = background
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    g2.fillRoundRect(0, 0, width, height, JBUI.scale(16), JBUI.scale(16))
+                } finally {
+                    g2.dispose()
+                }
+                super.paintComponent(g)
+            }
         }
+        container.add(bubble)
+        refresh(container)
     }
 
     private fun appendUserBubble(container: JPanel, text: String) {

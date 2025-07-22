@@ -1,9 +1,12 @@
 package com.github.egorbaranov.cod3.completions.codeCompletion
 import com.github.egorbaranov.cod3.completions.CompletionClientProvider
+import com.intellij.openapi.components.Service
+import ee.carlrobert.llm.client.openai.completion.OpenAIChatCompletionModel
 import ee.carlrobert.llm.client.openai.completion.request.OpenAITextCompletionRequest
 import ee.carlrobert.llm.completion.CompletionEventListener
 import okhttp3.sse.EventSource
 
+@Service(Service.Level.PROJECT)
 class CodeCompletionService {
 
     fun getCodeCompletionAsync(
