@@ -1,6 +1,7 @@
 package com.github.egorbaranov.cod3.ui.components
 
 import com.github.egorbaranov.cod3.ui.Icons
+import com.github.egorbaranov.cod3.util.wrapTextStyles
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
@@ -18,6 +19,8 @@ import java.awt.*
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import javax.swing.*
+import javax.swing.event.HyperlinkListener
+import javax.swing.text.DefaultCaret
 
 class ChatBubble(
     initialText: String,
@@ -97,7 +100,7 @@ class ChatBubble(
         } else {
             val lastBlock = blocks.last()
             if (lastBlock.type == Block.BlockType.TEXT) {
-                (components.last() as JTextArea).text = lastBlock.text
+                (components.last() as JTextPane).text = wrapTextStyles(lastBlock.text)
             } else {
                 val lastEditor = createdEditors.last()
                 println("set text to editor: $lastEditor: ${lastBlock.text}")
@@ -170,7 +173,9 @@ class ChatBubble(
         var code = markdown.startsWith("```")
         val result = mutableListOf<Block>()
 
-        for (block in markdown.split("```")) {
+        println("blocks: ${markdown.split("```")}")
+
+        for (block in markdown.split("```").filter { it.isNotEmpty() }) {
             result.add(
                 Block(
                     block.trim().let {
@@ -196,15 +201,16 @@ class ChatBubble(
         }
     }
 
-    private fun createLabelComponent(text: String): JTextArea {
-        return JTextArea(text).apply {
-            lineWrap = true
-            wrapStyleWord = true
-            isOpaque = false
-            isEditable = false
-            alignmentX = LEFT_ALIGNMENT
-            foreground = if (isDarkBackground(background)) Color.WHITE else Color.BLACK
-        }
+    private fun createLabelComponent(text: String): JTextPane {
+        val textPane = JTextPane()
+        textPane.putClientProperty(JTextPane.HONOR_DISPLAY_PROPERTIES, true)
+//        textPane.addHyperlinkListener(listener)
+        textPane.setContentType("text/html")
+        textPane.isEditable = false
+        textPane.text = wrapTextStyles(text)
+        textPane.setOpaque(false)
+        (textPane.caret as DefaultCaret).setUpdatePolicy(DefaultCaret.NEVER_UPDATE)
+        return textPane
     }
 
     private fun createEditorComponent(

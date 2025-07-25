@@ -21,6 +21,7 @@ import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.openapi.vfs.findDocument
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ex.ToolWindowEx
@@ -270,7 +271,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
             val footer = panel {
                 row {
                     cell(comboBoxAction)
-                    cell(createComboBox(listOf("Agent", "Ask", "Manual", "Background")))
+                    cell(createComboBox(listOf("Agent", "Manual")))
                     cell(sendButton).align(AlignX.RIGHT)
                 }
             }.andTransparent().withBorder(JBUI.Borders.empty(0, 4))
@@ -490,184 +491,231 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         println("processing a tool call: $toolCall")
 
         return when (name) {
-                "write_file" -> {
-                    val pathString = args["path"] ?: error("missing path")
-                    val content = args["content"] ?: error("missing content")
+            "write_file" -> {
+                val pathString = args["path"] ?: error("missing path")
+                val content = args["content"] ?: error("missing content")
 
-                    // Normalize to system‐independent path
-                    val path = Paths.get(project.basePath!!)
-                        .resolve(pathString.trimStart('/', '\\'))
-                        .toAbsolutePath()
-                    val parentPath = path.parent.toAbsolutePath().toString()
-                    val fileName = path.fileName.toString()
+                // Normalize to system‐independent path
+                val path = Paths.get(project.basePath!!)
+                    .resolve(pathString.trimStart('/', '\\'))
+                    .toAbsolutePath()
+                val parentPath = path.parent.toAbsolutePath().toString()
+                val fileName = path.fileName.toString()
 
-                    // Ensure the parent directory exists on disk
-                    println("parent path: $parentPath, path: $path")
-                    File(parentPath).apply { if (!exists()) mkdirs() }
+                // Ensure the parent directory exists on disk
+                println("parent path: $parentPath, path: $path")
+                File(parentPath).apply { if (!exists()) mkdirs() }
 
-                    lateinit var createdVFile: com.intellij.openapi.vfs.VirtualFile
+                lateinit var createdVFile: com.intellij.openapi.vfs.VirtualFile
 
-                    WriteCommandAction.runWriteCommandAction(project) {
-                        // Locate (or refresh) the parent directory in the VFS
-                        val parentVDir = LocalFileSystem.getInstance()
-                            .refreshAndFindFileByPath(parentPath)
-                            ?: error("Could not find or create VFS directory: $parentPath")
+                WriteCommandAction.runWriteCommandAction(project) {
+                    // Locate (or refresh) the parent directory in the VFS
+                    val parentVDir = LocalFileSystem.getInstance()
+                        .refreshAndFindFileByPath(parentPath)
+                        ?: error("Could not find or create VFS directory: $parentPath")
 
-                        // find or create the file
-                        createdVFile = parentVDir.findChild(fileName)
-                            ?: parentVDir.createChildData(this, fileName)
-                        // write the text (this also handles line‐endings, encoding, etc.)
-                        VfsUtil.saveText(createdVFile, content)
-                    }
-
-                    ApplicationManager.getApplication().invokeLater {
-                        FileEditorManager.getInstance(project)
-                            .openFile(createdVFile, true)
-                    }
-
-                    println("✅ Wrote $pathString")
-                    "Successfully wrote file in path=$pathString"
+                    // find or create the file
+                    createdVFile = parentVDir.findChild(fileName)
+                        ?: parentVDir.createChildData(this, fileName)
+                    // write the text (this also handles line‐endings, encoding, etc.)
+                    VfsUtil.saveText(createdVFile, content)
                 }
 
-
-                "edit_file" -> {
-                    val path = args["path"] ?: error("missing path")
-                    val edits = args["edits"] ?: error("missing edits")
-                    val filePath = Paths.get(project.basePath!!)
-                        .resolve(path.trimStart('/', '\\'))
-                        .toAbsolutePath()
-                    val file = File(filePath.toString())
-
-                    if (!file.exists()) error("file not found: $path")
-                    file.appendText("\n$edits")
-                    println("Edited file in path=$path")
-                    "Successfully edited $path"
+                ApplicationManager.getApplication().invokeLater {
+                    FileEditorManager.getInstance(project)
+                        .openFile(createdVFile, true)
                 }
 
-
-                "find" -> {
-                    val rawPattern = args["pattern"] ?: error("missing pattern")   // now a real regex
-                    val basePath = project.basePath
-                        ?: error("missing Project basePath")
-                    val baseDir = Paths.get(basePath)
-
-                    // Compile the user’s pattern into a Kotlin Regex.
-                    // RegexOption.IGNORE_CASE is optional—remove if you want strict case.
-                    val regex = rawPattern.toRegex(RegexOption.IGNORE_CASE)
-
-                    val matches = File(basePath).walk()
-                        .filter { it.isFile }
-                        .map { file ->
-                            // path relative to project root, with forward slashes
-                            baseDir.relativize(file.toPath()).toString().replace("\\", "/")
-                        }
-                        .filter { relPath ->
-                            // true if the regex finds a match anywhere in the relative path
-                            regex.find(relPath) != null
-                        }
-                        .toList()
-
-                    println("🔍 find results for regex /$rawPattern/ in project '$basePath':")
-                    matches.forEach { println(" - $it") }
-
+                SwingUtilities.invokeLater {
                     container.addCustomBubble(JPanel(VerticalLayout(8)).also {
-                        for (match in matches) {
-                            container.add(createBubble(match, JBColor.LIGHT_GRAY))
-                        }
-
+                        container.add(
+                            createEditorComponent(
+                                createdVFile.findDocument()!!,
+                                createdVFile.extension,
+                                path = pathString
+                            ) {}
+                        )
                         refresh(container)
                     })
-
-                    "Successfully found ${matches.size} result(s) for regex /$rawPattern/ in project:\n" +
-                            matches.joinToString("\n") { " - /$it" }
                 }
 
-                "codebase_search" -> {
-                    val query = args["query"] ?: error("missing query")
-                    val topK = args["top_k"]?.toIntOrNull() ?: 5
-                    // Stub: in real life you'd call your semantic‐search index here
-                    println("💡 (stub) searching codebase for '$query' (top $topK)")
-                    "Successfully searched codebase for '$query' (top $topK) and found results: "
+                println("✅ Wrote $pathString")
+                "Successfully wrote file in path=$pathString"
+            }
+
+
+            "edit_file" -> {
+                val pathString = args["path"] ?: error("missing path")
+                val newContent = args["edits"] ?: error("missing edits")
+
+                val filePath = Paths.get(project.basePath!!)
+                    .resolve(pathString.trimStart('/', '\\'))
+                    .toAbsolutePath()
+                val file = File(filePath.toString())
+                if (!file.exists()) error("file not found: $pathString")
+
+                // Locate the VFS file before editing
+                val vFile = LocalFileSystem.getInstance()
+                    .refreshAndFindFileByPath(filePath.toString())
+                    ?: error("VFS file not found: $filePath")
+
+                // Save original to temp file to use in diff
+                val tempOriginal = File.createTempFile("orig", null)
+                tempOriginal.writeBytes(vFile.contentsToByteArray())
+                val origVFile = LocalFileSystem.getInstance()
+                    .refreshAndFindFileByPath(tempOriginal.absolutePath)
+                    ?: error("temp VFS file not found")
+
+                // Overwrite the file content in a write action
+                WriteCommandAction.runWriteCommandAction(project) {
+                    VfsUtil.saveText(vFile, newContent)
                 }
 
-                "list_directory" -> {
-                    val dirArg = args["directory"].orEmpty()
+                // Refresh the VFS to pick up the changes
+                LocalFileSystem.getInstance().refreshAndFindFileByPath(filePath.toString())
 
-                    val projectBasePath = project.basePath ?: error("Project base path not available")
-                    val dir = File(projectBasePath, dirArg).canonicalFile
+                // Embed diff between orig and edited
+                SwingUtilities.invokeLater {
+                    container.addCustomBubble(JPanel(VerticalLayout(8)).also {
+                        container.add(
+                            createInlineDiffComponent(
+                                project,
+                                origVFile,
+                                vFile
+                            )
+                        )
+                        refresh(container)
+                    })
+                }
 
-                    if (!dir.isDirectory) error("$dir is not a directory")
+                println("✅ Edited file at path=$pathString")
+                "Successfully edited $pathString"
+            }
 
-                    val children = dir.listFiles() ?: emptyArray()
-                    println("📁 listing '${dir.relativeTo(File(projectBasePath))}':")
-                    children.forEach {
-                        val type = if (it.isDirectory) "dir" else "file"
-                        println(" - [$type] ${it.name} (${it.length()} bytes)")
+
+            "find" -> {
+                val rawPattern = args["pattern"] ?: error("missing pattern")   // now a real regex
+                val basePath = project.basePath
+                    ?: error("missing Project basePath")
+                val baseDir = Paths.get(basePath)
+
+                // Compile the user’s pattern into a Kotlin Regex.
+                // RegexOption.IGNORE_CASE is optional—remove if you want strict case.
+                val regex = rawPattern.toRegex(RegexOption.IGNORE_CASE)
+
+                val matches = File(basePath).walk()
+                    .filter { it.isFile }
+                    .map { file ->
+                        // path relative to project root, with forward slashes
+                        baseDir.relativize(file.toPath()).toString().replace("\\", "/")
+                    }
+                    .filter { relPath ->
+                        // true if the regex finds a match anywhere in the relative path
+                        regex.find(relPath) != null
+                    }
+                    .toList()
+
+                println("🔍 find results for regex /$rawPattern/ in project '$basePath':")
+                matches.forEach { println(" - $it") }
+
+                container.addCustomBubble(JPanel(VerticalLayout(8)).also {
+                    for (match in matches) {
+                        container.add(createBubble(match, JBColor.LIGHT_GRAY))
                     }
 
-                    "Successfully listed directory '${dir.relativeTo(File(projectBasePath))}' with contents:\n${
-                        children.map {
-                            it.relativeTo(
-                                File(
-                                    projectBasePath
-                                )
-                            )
-                        }.joinToString("\n")
-                    }"
+                    refresh(container)
+                })
+
+                "Successfully found ${matches.size} result(s) for regex /$rawPattern/ in project:\n" +
+                        matches.joinToString("\n") { " - /$it" }
+            }
+
+            "codebase_search" -> {
+                val query = args["query"] ?: error("missing query")
+                val topK = args["top_k"]?.toIntOrNull() ?: 5
+                // Stub: in real life you'd call your semantic‐search index here
+                println("💡 (stub) searching codebase for '$query' (top $topK)")
+                "Successfully searched codebase for '$query' (top $topK) and found results: "
+            }
+
+            "list_directory" -> {
+                val dirArg = args["directory"].orEmpty()
+
+                val projectBasePath = project.basePath ?: error("Project base path not available")
+                val dir = File(projectBasePath, dirArg).canonicalFile
+
+                if (!dir.isDirectory) error("$dir is not a directory")
+
+                val children = dir.listFiles() ?: emptyArray()
+                println("📁 listing '${dir.relativeTo(File(projectBasePath))}':")
+                children.forEach {
+                    val type = if (it.isDirectory) "dir" else "file"
+                    println(" - [$type] ${it.name} (${it.length()} bytes)")
                 }
 
+                "Successfully listed directory '${dir.relativeTo(File(projectBasePath))}' with contents:\n${
+                    children.map {
+                        it.relativeTo(
+                            File(
+                                projectBasePath
+                            )
+                        )
+                    }.joinToString("\n")
+                }"
+            }
 
-                "grep_search" -> {
-                    val pattern = args["pattern"] ?: error("missing pattern")
-                    val path = args["path"] ?: error("missing path")
-                    val recursive = args["recursive"]?.toBoolean() ?: true
-                    val regex = pattern.toRegex()
-                    val direction = if (recursive) FileWalkDirection.TOP_DOWN else FileWalkDirection.BOTTOM_UP
 
-                    File(path).walk(direction).forEach { file ->
-                        if (file.isFile) {
-                            file.readLines().forEachIndexed { idx, line ->
-                                if (regex.containsMatchIn(line)) {
-                                    println("🧪 ${file.path}:${idx + 1}: $line")
-                                }
+            "grep_search" -> {
+                val pattern = args["pattern"] ?: error("missing pattern")
+                val path = args["path"] ?: error("missing path")
+                val recursive = args["recursive"]?.toBoolean() ?: true
+                val regex = pattern.toRegex()
+                val direction = if (recursive) FileWalkDirection.TOP_DOWN else FileWalkDirection.BOTTOM_UP
+
+                File(path).walk(direction).forEach { file ->
+                    if (file.isFile) {
+                        file.readLines().forEachIndexed { idx, line ->
+                            if (regex.containsMatchIn(line)) {
+                                println("🧪 ${file.path}:${idx + 1}: $line")
                             }
                         }
                     }
-
-                    "Successfully provided grep search results for '$pattern' in '$path' (recursive=$recursive):"
                 }
 
-                "view_code_item" -> {
-                    val item = args["item_name"] ?: error("missing item_name")
-                    val path = args["path"] ?: error("missing path")
-                    val v = File(path).useLines { lines ->
-                        val snippet = lines
-                            .dropWhile { !it.contains("fun $item") && !it.contains("class $item") }
-                            .takeWhile { !it.startsWith("}") }
-                            .joinToString("\n")
-                        println("$item in $path:\n$snippet")
-                        return@useLines snippet
-                    }
-
-                    "Successfully viewed code item $item in $path:\n$v"
-                }
-
-                "view_file" -> {
-                    val path = args["path"] ?: error("missing path")
-                    val filePath = Paths.get(project.basePath!!)
-                        .resolve(path.trimStart('/', '\\'))
-                        .toAbsolutePath()
-                    val file = File(filePath.toString())
-                    if (!file.exists()) error("file not found: $path")
-                    println("📄 contents of $path:\n${file.readText()}")
-                    "Successfully viewed contents of $path:\n${file.readText()}"
-                }
-
-                else -> {
-                    println("⚠️ Unknown tool: $name")
-                    null
-                }
+                "Successfully provided grep search results for '$pattern' in '$path' (recursive=$recursive):"
             }
+
+            "view_code_item" -> {
+                val item = args["item_name"] ?: error("missing item_name")
+                val path = args["path"] ?: error("missing path")
+                val v = File(path).useLines { lines ->
+                    val snippet = lines
+                        .dropWhile { !it.contains("fun $item") && !it.contains("class $item") }
+                        .takeWhile { !it.startsWith("}") }
+                        .joinToString("\n")
+                    println("$item in $path:\n$snippet")
+                    return@useLines snippet
+                }
+
+                "Successfully viewed code item $item in $path:\n$v"
+            }
+
+            "view_file" -> {
+                val path = args["path"] ?: error("missing path")
+                val filePath = Paths.get(project.basePath!!)
+                    .resolve(path.trimStart('/', '\\'))
+                    .toAbsolutePath()
+                val file = File(filePath.toString())
+                if (!file.exists()) error("file not found: $path")
+                println("📄 contents of $path:\n${file.readText()}")
+                "Successfully viewed contents of $path:\n${file.readText()}"
+            }
+
+            else -> {
+                println("⚠️ Unknown tool: $name")
+                null
+            }
+        }
     }
 
     private fun JPanel.addCustomBubble(component: JPanel) {

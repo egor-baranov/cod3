@@ -1,24 +1,26 @@
 package com.github.egorbaranov.cod3.completions.codeCompletion
 
-import com.intellij.codeInsight.inline.completion.*
+import com.intellij.codeInsight.inline.completion.DebouncedInlineCompletionProvider
+import com.intellij.codeInsight.inline.completion.InlineCompletionEvent
+import com.intellij.codeInsight.inline.completion.InlineCompletionProviderID
+import com.intellij.codeInsight.inline.completion.InlineCompletionRequest
 import com.intellij.codeInsight.inline.completion.elements.InlineCompletionGrayTextElement
 import com.intellij.codeInsight.inline.completion.suggestion.InlineCompletionSingleSuggestion
 import com.intellij.codeInsight.inline.completion.suggestion.InlineCompletionSuggestion
 import com.intellij.codeInsight.lookup.LookupManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.service
-import com.intellij.openapi.editor.CaretModel
 import com.intellij.openapi.project.Project
+import ee.carlrobert.llm.completion.CompletionEventListener
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import okhttp3.sse.EventSource
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
 import kotlin.time.toDuration
-import ee.carlrobert.llm.completion.CompletionEventListener
-import kotlinx.coroutines.channels.awaitClose
 
 class CodeCompletionProvider : DebouncedInlineCompletionProvider() {
 
