@@ -26,7 +26,6 @@ class ReferencePopupProvider(val editorTextField: EditorTextField, val contextRe
     }
 
     fun checkPopup(force: Boolean = false) {
-        println("check popup")
         val text = editorTextField.text
         val caret = editorTextField.caretModel.currentCaret.offset
         val at = text.lastIndexOf('@', caret)

@@ -63,7 +63,9 @@ fun insertBlockInlayAboveSelection(editor: Editor, project: Project) {
     val lineHeight = editor.lineHeight
 
     // Input field and panel
-    val textField = createResizableEditor(project, 40, 0).apply { font = font.deriveFont(11f) }
+    val textField = createResizableEditor(project, 40, 0) {
+        println("send message: $it")
+    }.apply { font = font.deriveFont(11f) }
     val panel = object : JPanel(BorderLayout()) {
         override fun paintComponent(g: Graphics) {
             val g2 = g.create() as Graphics2D

@@ -1,6 +1,8 @@
 package com.github.egorbaranov.cod3.ui
 
-import com.intellij.openapi.components.service
+import com.intellij.ide.IdeEventQueue
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.ex.EditorEx
@@ -9,13 +11,11 @@ import com.intellij.openapi.project.Project
 import com.intellij.ui.EditorTextField
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
-import java.awt.Dimension
-import java.awt.Graphics
-import java.awt.Graphics2D
-import java.awt.RenderingHints
+import java.awt.*
 import java.awt.event.ActionEvent
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
+import java.awt.event.MouseEvent
 import javax.swing.JComponent
 import javax.swing.JComponent.WHEN_FOCUSED
 import javax.swing.KeyStroke
@@ -25,12 +25,41 @@ fun createResizableEditor(
     minHeight: Int = JBUI.scale(48),
     maxHeight: Int = JBUI.scale(300),
     padding: Int = JBUI.scale(4),
-    lineSpacing: Int = JBUI.scale(4)
+    lineSpacing: Int = JBUI.scale(4),
+    sendMessage: (String) -> Unit
 ): EditorTextField {
-    val editorField = object : EditorTextField("", project, FileTypes.PLAIN_TEXT) {
+    val editorField = object : EditorTextField("", project, FileTypes.PLAIN_TEXT), Disposable {
 
         init {
             this.isOpaque = true
+        }
+
+        override fun onEditorAdded(editor: Editor) {
+            val editorTextField = this
+            IdeEventQueue.getInstance().addDispatcher(
+                object : IdeEventQueue.EventDispatcher {
+                    override fun dispatch(e: AWTEvent): Boolean {
+//                        print("dispatch event: $e")
+
+                        if ((e is KeyEvent || e is MouseEvent) && editorTextField.isFocusOwner) {
+                            if (e is KeyEvent) {
+                                if (e.id == KeyEvent.KEY_PRESSED && e.keyCode == KeyEvent.VK_ENTER) {
+                                    if (!e.isShiftDown && e.modifiersEx and InputEvent.ALT_DOWN_MASK == 0
+                                        && e.modifiersEx and InputEvent.CTRL_DOWN_MASK == 0
+                                    ) {
+                                        sendMessage(editorTextField.text)
+                                    }
+                                }
+
+                                return e.isConsumed
+                            }
+                        }
+
+                        return false
+                    }
+                },
+                this
+            )
         }
 
         override fun paintComponent(g: Graphics) {
@@ -74,6 +103,7 @@ fun createResizableEditor(
         }
 
         override fun getInsets() = JBUI.insets(8)
+        override fun dispose() {}
     }.apply {
         setOneLineMode(false)
         setPlaceholder("Ask anything...")
@@ -81,6 +111,36 @@ fun createResizableEditor(
         preferredSize = Dimension(preferredSize.width, minHeight)
         minimumSize = Dimension(minimumSize.width, minHeight)
     }
+
+    // Ensure the editor is created, so we can register key actions:
+    editorField.addNotify()
+
+    // 1) SHIFT+ENTER: just insert a newline (or no‐op if you prefer)
+    editorField.registerKeyboardAction(
+        { evt: ActionEvent ->
+            // By default EditorTextField inserts a newline on Shift+Enter
+            // so you can leave this empty (no-op) or explicitly insert one:
+            println("shift enter")
+            val editor = editorField.editor
+            editor?.document?.insertString(editor.caretModel.offset, "\n")
+        },
+        KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.SHIFT_DOWN_MASK),
+        JComponent.WHEN_FOCUSED
+    )
+
+    // 2) ENTER: send the message instead of inserting newline
+    editorField.registerKeyboardAction(
+        { _: ActionEvent ->
+            println("enter")
+            val text = editorField.text
+            if (text.isNotBlank()) {
+                sendMessage(text)
+                editorField.text = ""   // clear after send
+            }
+        },
+        KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0),
+        JComponent.WHEN_FOCUSED
+    )
 
     // Helper to recalc height based on visual lines:
     fun recalcHeight(editor: EditorEx) {

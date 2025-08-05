@@ -1,5 +1,6 @@
 package com.github.egorbaranov.cod3.settings
 
+import com.github.egorbaranov.cod3.ui.components.createModelComboBox
 import com.github.egorbaranov.cod3.util.UIUtils
 import com.intellij.openapi.options.SearchableConfigurable
 import com.intellij.openapi.project.Project
@@ -19,8 +20,11 @@ class PluginConfigurable : SearchableConfigurable {
 
     private var mySettingsComponent: JPanel? = null
 
-    private lateinit var apiKeyField: JBTextField
-    private lateinit var apiUrlField: JBTextField
+    private lateinit var completionApiKeyField: JBTextField
+    private lateinit var completionApiUrlField: JBTextField
+
+    private lateinit var chatApiKeyField: JBTextField
+    private lateinit var chatApiUrlField: JBTextField
 
     private var retryQuantityDropdown = ComboBox(arrayOf(1, 3, 5, 10, 20))
     private var indexingStepsDropdown = ComboBox(arrayOf(1, 2, 3))
@@ -37,55 +41,47 @@ class PluginConfigurable : SearchableConfigurable {
 
     override fun createComponent(): JComponent {
         val settings = PluginSettingsState.getInstance()
-        apiKeyField = JBTextField(settings.openAIApiKey, 40).also {
+        completionApiKeyField = JBTextField(settings.openAIApiKey, 40).also {
             it.text = PluginSettingsState.getInstance().openAIApiKey
         }
-        apiUrlField = JBTextField(settings.openAIApiUrl, 40).also {
+        completionApiUrlField = JBTextField(settings.openAIApiUrl, 40).also {
+            it.text = PluginSettingsState.getInstance().openAIApiUrl
+        }
+
+        chatApiKeyField = JBTextField(settings.openAIApiKey, 40).also {
+            it.text = PluginSettingsState.getInstance().openAIApiKey
+        }
+        chatApiUrlField = JBTextField(settings.openAIApiUrl, 40).also {
             it.text = PluginSettingsState.getInstance().openAIApiUrl
         }
 
         mySettingsComponent = panel {
-            group("Advanced Settings") {
-
-                row {
-                    cell(
-                        JPanel().also {
-                            it.add(Box.createVerticalStrut(4))
-                        }
-                    )
+            group("Completion") {
+                row("API key") {
+                    cell(completionApiKeyField)
                 }
 
-                row("OpenAI API key") {
-                    cell(apiKeyField)
+                row("API url") {
+                    cell(completionApiUrlField)
                 }
 
-                row("OpenAI API url") {
-                    cell(apiUrlField)
+                row("Model") {
+                    cell(createModelComboBox())
+                }
+            }
+
+            group("Chat") {
+                row("API key") {
+                    cell(chatApiKeyField)
                 }
 
-                row {
-                    cell(
-                        JPanel().also {
-                            it.add(Box.createVerticalStrut(4))
-                        }
-                    )
+                row("API url") {
+                    cell(chatApiUrlField)
                 }
 
-                row {
-                    cell(label("Retry quantity").component)
-                    cell(retryQuantityDropdown)
-                    cell(label("Indexing steps").component)
-                    cell(indexingStepsDropdown)
+                row("Model") {
+                    cell(createModelComboBox())
                 }
-
-                row {
-                    cell(
-                        JPanel().also {
-                            it.add(Box.createVerticalStrut(8))
-                        }
-                    )
-                }
-
             }
         }
         return mySettingsComponent!!
@@ -93,23 +89,23 @@ class PluginConfigurable : SearchableConfigurable {
 
     override fun isModified(): Boolean {
         val settings = PluginSettingsState.getInstance()
-        return apiKeyField.text != settings.openAIApiKey ||
-                apiUrlField.text != settings.openAIApiUrl ||
+        return completionApiKeyField.text != settings.openAIApiKey ||
+                completionApiUrlField.text != settings.openAIApiUrl ||
                 retryQuantityDropdown.item != settings.retryQuantity
     }
 
     override fun apply() {
         val settings = PluginSettingsState.getInstance()
-        settings.openAIApiKey = apiKeyField.text
-        settings.openAIApiUrl = apiUrlField.text.takeIf { it.isNotEmpty() } ?: PluginSettingsState.DEFAULT_OPENAI_API_URL
+        settings.openAIApiKey = completionApiKeyField.text
+        settings.openAIApiUrl = completionApiUrlField.text.takeIf { it.isNotEmpty() } ?: PluginSettingsState.DEFAULT_OPENAI_API_URL
         settings.retryQuantity = retryQuantityDropdown.item
         settings.indexingSteps = indexingStepsDropdown.item
     }
 
     override fun reset() {
         val settings = PluginSettingsState.getInstance()
-        apiKeyField.text = settings.openAIApiKey
-        apiUrlField.text = settings.openAIApiUrl
+        completionApiKeyField.text = settings.openAIApiKey
+        completionApiUrlField.text = settings.openAIApiUrl
         retryQuantityDropdown.item = settings.retryQuantity
         indexingStepsDropdown.item = settings.indexingSteps
     }

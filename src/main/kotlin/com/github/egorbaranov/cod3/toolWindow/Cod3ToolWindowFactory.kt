@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.github.egorbaranov.cod3.completions.CompletionsRequestService
 import com.github.egorbaranov.cod3.completions.factory.AssistantMessage
 import com.github.egorbaranov.cod3.completions.factory.OpenAIRequestFactory
+import com.github.egorbaranov.cod3.completions.factory.ToolMessage
 import com.github.egorbaranov.cod3.completions.factory.UserMessage
 import com.github.egorbaranov.cod3.ui.Icons
 import com.github.egorbaranov.cod3.ui.components.*
@@ -21,6 +22,7 @@ import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.findDocument
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
@@ -40,6 +42,7 @@ import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import com.jetbrains.rd.swing.mouseClicked
 import ee.carlrobert.llm.client.openai.completion.ErrorDetails
 import ee.carlrobert.llm.client.openai.completion.OpenAIChatCompletionModel
 import ee.carlrobert.llm.client.openai.completion.request.OpenAIChatCompletionStandardMessage
@@ -53,7 +56,9 @@ import java.awt.geom.Rectangle2D
 import java.awt.geom.RoundRectangle2D
 import java.io.File
 import java.nio.file.Paths
+import java.util.regex.PatternSyntaxException
 import javax.swing.*
+import kotlin.math.max
 
 class Cod3ToolWindowFactory : ToolWindowFactory {
 
@@ -95,18 +100,10 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     }
 
     private fun addChatTab(project: Project, toolWindow: ToolWindow) {
-        // Create fresh per-tab components:
-        val editorTextField: EditorTextField = createResizableEditor(project, minHeight = 48)
-        val contextReferencePanel = ScrollableSpacedPanel(4).apply {
-            alignmentY = Component.CENTER_ALIGNMENT
-        }
-
-        val referencePopupProvider = ReferencePopupProvider(editorTextField, contextReferencePanel)
-        // Build the chat panel, passing these fresh components:
         chatQuantity++
 
         val panel = SimpleToolWindowPanel(true, true).apply {
-            setContent(createChatPanel(project, chatQuantity, referencePopupProvider))
+            setContent(createChatPanel(project, chatQuantity))
         }
 
         val content: Content = ContentFactory.getInstance()
@@ -149,7 +146,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
 
         val scroll = JBScrollPane(messageContainer).apply {
-            verticalScrollBar.unitIncrement = JBUI.scale(16)
+//            verticalScrollBar.unitIncrement = JBUI.scale(16)
         }
 
         for (i in 1..chatQuantity) {
@@ -167,8 +164,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
     private fun createChatPanel(
         project: Project,
-        chatIndex: Int,
-        referencePopupProvider: ReferencePopupProvider
+        chatIndex: Int
     ): JComponent {
         val messageContainer = JBPanel<JBPanel<*>>(VerticalLayout(JBUI.scale(8))).apply {
             border = JBUI.Borders.empty(4)
@@ -176,12 +172,17 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
 
         val scroll = JBScrollPane(messageContainer).apply {
-            verticalScrollBar.unitIncrement = JBUI.scale(16)
+//            verticalScrollBar.unitIncrement = JBUI.scale(16)
             verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
             horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
         }
 
-        val sendButton = IconLabelButton(Icons.Send, {
+        lateinit var sendButton: IconLabelButton
+        lateinit var referencePopupProvider: ReferencePopupProvider
+
+        // Create fresh per-tab components:
+        val editorTextField: EditorTextField = createResizableEditor(project, minHeight = 48) {
+            println("send message: ")
             sendMessage(
                 project,
                 chatIndex,
@@ -190,7 +191,25 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                 messageContainer,
                 scroll
             )
-        }).apply {
+        }
+
+        val contextReferencePanel = ScrollableSpacedPanel(4).apply {
+            alignmentY = Component.CENTER_ALIGNMENT
+        }
+
+        referencePopupProvider = ReferencePopupProvider(editorTextField, contextReferencePanel)
+        // Build the chat panel, passing these fresh components:
+
+        sendButton = IconLabelButton(Icons.Send) {
+            sendMessage(
+                project,
+                chatIndex,
+                referencePopupProvider.editorTextField.text.trim(),
+                referencePopupProvider,
+                messageContainer,
+                scroll
+            )
+        }.apply {
             minimumSize = Dimension(24, 24)
             preferredSize = Dimension(24, 24)
             cursor = Cursor(Cursor.HAND_CURSOR)
@@ -272,6 +291,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                 row {
                     cell(comboBoxAction)
                     cell(createComboBox(listOf("Agent", "Manual")))
+                    cell(checkBox("Auto-apply").component)
                     cell(sendButton).align(AlignX.RIGHT)
                 }
             }.andTransparent().withBorder(JBUI.Borders.empty(0, 4))
@@ -303,6 +323,12 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
             if (text != null) {
                 appendUserBubble(messageContainer, text)
+                with(scroll.verticalScrollBar) {
+                    if (value >= maximum - 100) {
+                        println("scroll to bottom: value=$value, maximum=$maximum")
+                        value = maximum
+                    }
+                }
             }
 
             if (messages[chatIndex] == null) {
@@ -351,7 +377,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                                 "Error executing tool: ${e.message}"
                             }
 
-                            messages[chatIndex]?.add(UserMessage(messageText))
+                            messages[chatIndex]?.add(ToolMessage(messageText))
                             appendUserBubble(
                                 messageContainer,
                                 messageText
@@ -382,6 +408,12 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                                 cachedBubble?.updateText(text)
                             } else {
                                 cachedBubble = appendAssistantBubble(messageContainer, message)
+                            }
+
+                            with(scroll.verticalScrollBar) {
+                                if (value >= maximum - 20) {
+                                    value = maximum
+                                }
                             }
                         }
                     }
@@ -491,6 +523,12 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         println("processing a tool call: $toolCall")
 
         return when (name) {
+            "run_command" -> {
+                val command = args["command"] ?: error("missing command")
+                println("✅ Run $command")
+                "Successfully run command=$command"
+            }
+
             "write_file" -> {
                 val pathString = args["path"] ?: error("missing path")
                 val content = args["content"] ?: error("missing content")
@@ -506,7 +544,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                 println("parent path: $parentPath, path: $path")
                 File(parentPath).apply { if (!exists()) mkdirs() }
 
-                lateinit var createdVFile: com.intellij.openapi.vfs.VirtualFile
+                lateinit var createdVFile: VirtualFile
 
                 WriteCommandAction.runWriteCommandAction(project) {
                     // Locate (or refresh) the parent directory in the VFS
@@ -594,39 +632,93 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
 
             "find" -> {
-                val rawPattern = args["pattern"] ?: error("missing pattern")   // now a real regex
+                val rawPattern = args["pattern"]
+                    ?: error("missing pattern")
+
+                // Helper: convert shell-style glob to regex
+                fun globToRegex(glob: String): String {
+                    val sb = StringBuilder("^")
+                    var i = 0
+                    while (i < glob.length) {
+                        when (val c = glob[i]) {
+                            '*' -> sb.append(".*")
+                            '?' -> sb.append(".")
+                            '[' -> {
+                                // copy character class up to closing ]
+                                val j = glob.indexOf(']', i + 1).takeIf { it > i } ?: i
+                                sb.append(glob.substring(i, j + 1))
+                                i = j
+                            }
+
+                            '\\' -> {
+                                // escape next char literally
+                                if (i + 1 < glob.length) {
+                                    sb.append("\\\\").append(glob[i + 1])
+                                    i++
+                                } else sb.append("\\\\")
+                            }
+
+                            else -> {
+                                // escape regex metachars
+                                if ("\\.[]{}()+-^$|".contains(c)) sb.append("\\")
+                                sb.append(c)
+                            }
+                        }
+                        i++
+                    }
+                    sb.append("$")
+                    return sb.toString()
+                }
+
+                // Decide whether we're in raw‑regex mode or glob mode
+                val (patternBody, isRegex) = if (rawPattern.startsWith("r:")) {
+                    rawPattern.drop(2) to true
+                } else {
+                    rawPattern to false
+                }
+
+                // Build final regex string
+                val regexString = if (isRegex) {
+                    patternBody
+                } else {
+                    globToRegex(patternBody)
+                }
+
+                // Compile
+                val regex = try {
+                    regexString.toRegex(RegexOption.IGNORE_CASE)
+                } catch (ex: PatternSyntaxException) {
+                    error("Invalid pattern syntax: ${ex.message}")
+                }
+
+                // Walk *all* files, relativize paths, and filter by our regex
                 val basePath = project.basePath
                     ?: error("missing Project basePath")
                 val baseDir = Paths.get(basePath)
-
-                // Compile the user’s pattern into a Kotlin Regex.
-                // RegexOption.IGNORE_CASE is optional—remove if you want strict case.
-                val regex = rawPattern.toRegex(RegexOption.IGNORE_CASE)
-
                 val matches = File(basePath).walk()
                     .filter { it.isFile }
                     .map { file ->
-                        // path relative to project root, with forward slashes
-                        baseDir.relativize(file.toPath()).toString().replace("\\", "/")
+                        baseDir.relativize(file.toPath())
+                            .toString()
+                            .replace("\\", "/")
                     }
                     .filter { relPath ->
-                        // true if the regex finds a match anywhere in the relative path
-                        regex.find(relPath) != null
+                        regex.containsMatchIn(relPath)
                     }
                     .toList()
 
-                println("🔍 find results for regex /$rawPattern/ in project '$basePath':")
-                matches.forEach { println(" - $it") }
+                // Output
+                println("🔍 find results for ${if (isRegex) "regex" else "glob"} /$rawPattern/ in '$basePath':")
+                matches.forEach { println(" • $it") }
 
                 container.addCustomBubble(JPanel(VerticalLayout(8)).also {
-                    for (match in matches) {
-                        container.add(createBubble(match, JBColor.LIGHT_GRAY))
+                    matches.forEach { path ->
+                        container.add(createBubble(path, JBColor.LIGHT_GRAY))
                     }
-
                     refresh(container)
                 })
 
-                "Successfully found ${matches.size} result(s) for regex /$rawPattern/ in project:\n" +
+                "Successfully found ${matches.size} result(s) for ${if (isRegex) "regex" else "glob"} /$rawPattern/:\n" +
                         matches.joinToString("\n") { " - /$it" }
             }
 

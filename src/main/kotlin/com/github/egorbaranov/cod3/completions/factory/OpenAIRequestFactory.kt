@@ -29,4 +29,6 @@ class OpenAIRequestFactory {
 
 data class SystemMessage(val text: String) : OpenAIChatCompletionStandardMessage("system", text)
 data class UserMessage(val text: String) : OpenAIChatCompletionStandardMessage("user", text)
+
+data class ToolMessage(val text: String) : OpenAIChatCompletionStandardMessage("tool", text)
 data class AssistantMessage(val text: String) : OpenAIChatCompletionStandardMessage("assistant", text)

@@ -1,5 +1,7 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
+    <idea-version since-build="213.0" until-build="241.*"/>
+
     <id>com.github.egorbaranov.cod3</id>
     <name>Cod3</name>
     <vendor>egor-baranov</vendor>
