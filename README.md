@@ -1,4 +1,4 @@
-# Cod3 plugin is open for contributions
+# Cod3 plugin 
 
 ## The new free and open source AI-first plugin for JetBrains IDEs
 
