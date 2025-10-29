@@ -122,13 +122,26 @@ internal class ChatTabController(
     private fun sendMessageViaAcp(userMessage: String) {
         val accumulatedText = StringBuilder()
         val textBubbleRef = AtomicReference<com.github.egorbaranov.cod3.ui.components.ChatBubble?>()
+
+        fun finalizeAssistantBubble() {
+            if (accumulatedText.isNotEmpty()) {
+                accumulatedText.setLength(0)
+            }
+            textBubbleRef.set(null)
+        }
         val service = project.service<AcpClientService>()
 
         service.sendPrompt(userMessage) { event ->
             when (event) {
                 is AcpStreamEvent.AgentContentText -> appendStreamingAssistant(accumulatedText, textBubbleRef, event.text)
-                is AcpStreamEvent.PlanUpdate -> planRenderer.render(event.entries)
-                is AcpStreamEvent.ToolCallUpdate -> handleAcpToolUpdate(event)
+                is AcpStreamEvent.PlanUpdate -> {
+                    finalizeAssistantBubble()
+                    planRenderer.render(event.entries)
+                }
+                is AcpStreamEvent.ToolCallUpdate -> {
+                    finalizeAssistantBubble()
+                    handleAcpToolUpdate(event)
+                }
                 is AcpStreamEvent.Completed -> appendStreamingAssistant(accumulatedText, textBubbleRef, "")
                 is AcpStreamEvent.Error -> {
                     val errorMessage = event.throwable.message ?: event.throwable.javaClass.simpleName

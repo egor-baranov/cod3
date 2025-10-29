@@ -2,8 +2,10 @@ package com.github.egorbaranov.cod3.toolWindow.chat
 
 import com.github.egorbaranov.cod3.ui.components.ChatBubble
 import com.intellij.ui.JBColor
+import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.RenderingHints
@@ -11,10 +13,14 @@ import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 
-internal fun JPanel.addChatBubble(component: JPanel): JPanel {
+internal fun JPanel.addChatBubble(
+    component: JPanel,
+    background: Color = JBColor(0x3F4248, 0x33363D)
+): JPanel {
     val bubble = object : JPanel(BorderLayout()) {
         init {
-            background = JBColor.LIGHT_GRAY
+            this.background = background
+            border = JBUI.Borders.empty(6, 10)
             add(component)
         }
 

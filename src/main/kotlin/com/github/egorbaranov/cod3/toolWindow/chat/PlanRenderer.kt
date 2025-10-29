@@ -10,6 +10,8 @@ import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 
+import java.awt.Color
+
 internal class PlanRenderer(
     private val messageContainer: JPanel,
     private val scroll: JScrollPane
@@ -27,7 +29,7 @@ internal class PlanRenderer(
         }
 
         val planCard = card ?: createPlanCard().also { created ->
-            val bubble = messageContainer.addChatBubble(created.panel)
+            val bubble = messageContainer.addChatBubble(created.panel, PLAN_BUBBLE_COLOR)
             created.bubble = bubble
             card = created
         }
@@ -108,4 +110,8 @@ internal class PlanRenderer(
         val contentLabel: JLabel,
         val metaLabel: JLabel
     )
+
+    companion object {
+        private val PLAN_BUBBLE_COLOR = JBColor(Color(0x4A4E55), Color(0x393D43))
+    }
 }

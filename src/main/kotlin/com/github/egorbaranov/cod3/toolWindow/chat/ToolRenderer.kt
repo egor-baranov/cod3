@@ -5,6 +5,7 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.util.ui.JBUI
+import java.awt.Color
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
@@ -18,7 +19,7 @@ internal class ToolRenderer(
 
     fun render(snapshot: ToolCallSnapshot, isFinal: Boolean) {
         val card = cards[snapshot.id] ?: createToolCard().also { created ->
-            val bubble = messageContainer.addChatBubble(created.panel)
+            val bubble = messageContainer.addChatBubble(created.panel, TOOL_BUBBLE_COLOR)
             created.bubble = bubble
             cards[snapshot.id] = created
         }
@@ -104,5 +105,9 @@ internal class ToolRenderer(
                 container.isVisible = true
             }
         }
+    }
+
+    companion object {
+        private val TOOL_BUBBLE_COLOR = JBColor(Color(0x50545B), Color(0x3B3F45))
     }
 }
