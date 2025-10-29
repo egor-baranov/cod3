@@ -68,8 +68,12 @@ class ChatBubble(
     /**
      * Updates the bubble's text content, rebuilding components accordingly.
      */
-    fun updateText(newText: String) {
-        if (newText == currentText || newText.length < currentText.length) return
+    fun updateText(newText: String, forceReplace: Boolean = false) {
+        if (!forceReplace) {
+            if (newText == currentText || newText.length < currentText.length) return
+        } else if (newText == currentText) {
+            return
+        }
         currentText = newText
         SwingUtilities.invokeLater {
             rebuildContentAndAdjustHeight()

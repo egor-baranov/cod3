@@ -28,6 +28,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.LinkedHashMap
 import kotlin.math.min
 
 @Service(Service.Level.PROJECT)
@@ -213,15 +214,22 @@ class AcpClientService(
             }
 
             is SessionUpdate.PlanUpdate -> {
-                val planText = buildPlanText(update)
-                if (planText.isNotBlank()) {
-                    listener(AcpStreamEvent.AgentContentText(planText))
+                val planEntries = update.entries.mapIndexed { idx, entry ->
+                    PlanEntryView(
+                        order = idx + 1,
+                        content = entry.content,
+                        status = entry.status,
+                        priority = entry.priority
+                    )
                 }
+                listener(AcpStreamEvent.PlanUpdate(planEntries))
             }
 
             is SessionUpdate.ToolCall -> {
                 handleToolCallEvent(
                     id = update.toolCallId.value,
+                    title = update.title,
+                    kind = update.kind,
                     status = update.status,
                     rawInput = update.rawInput,
                     rawOutput = update.rawOutput,
@@ -234,6 +242,8 @@ class AcpClientService(
             is SessionUpdate.ToolCallUpdate -> {
                 handleToolCallEvent(
                     id = update.toolCallId.value,
+                    title = update.title,
+                    kind = update.kind,
                     status = update.status,
                     rawInput = update.rawInput,
                     rawOutput = update.rawOutput,
@@ -251,6 +261,8 @@ class AcpClientService(
 
     private fun handleToolCallEvent(
         id: String,
+        title: String?,
+        kind: ToolKind?,
         status: ToolCallStatus?,
         rawInput: JsonElement?,
         rawOutput: JsonElement?,
@@ -259,6 +271,13 @@ class AcpClientService(
         listener: (AcpStreamEvent) -> Unit
     ) {
         val state = activeToolCalls.getOrPut(id) { ActiveToolCall(id) }
+
+        if (!title.isNullOrBlank()) {
+            state.title = title
+        }
+        if (kind != null) {
+            state.kind = kind
+        }
 
         parseToolCallPayload(rawInput)?.let { payload ->
             if (payload.name != null) {
@@ -270,17 +289,14 @@ class AcpClientService(
         }
 
         if (content.isNotEmpty()) {
-            val summary = content.joinToString("\n") { toolCallContentToText(it) }.trim()
-            if (summary.isNotEmpty()) {
-                state.arguments.compute("content") { _, existing ->
-                    listOfNotNull(existing, summary).joinToString("\n").trim()
-                }
-            }
+            content.mapNotNull { toolCallContentToText(it).takeIf { text -> text.isNotBlank() } }
+                .forEach { state.addContent(it) }
         }
 
         parseToolCallPayload(rawOutput)?.let { payload ->
             if (payload.arguments.isNotEmpty()) {
                 state.arguments.putAll(payload.arguments)
+                payload.arguments.values.forEach(state::addContent)
             }
         }
 
@@ -293,21 +309,6 @@ class AcpClientService(
         if (final) {
             activeToolCalls.remove(id)
         }
-    }
-
-    private fun buildPlanText(update: SessionUpdate.PlanUpdate): String {
-        if (update.entries.isEmpty()) return ""
-        val builder = StringBuilder("Plan:\n")
-        update.entries.forEachIndexed { idx, entry ->
-            builder.append(idx + 1)
-                .append(". ")
-                .append(entry.content)
-            builder.append(" [")
-                .append(entry.status.name.lowercase())
-                .append("]")
-            builder.append('\n')
-        }
-        return builder.toString().trimEnd()
     }
 
     private fun contentBlockToText(content: ContentBlock): String? {
@@ -424,11 +425,29 @@ class AcpClientService(
 
     private class ActiveToolCall(val id: String) {
         var name: String? = null
+        var title: String? = null
+        var kind: ToolKind? = null
         val arguments: MutableMap<String, String> = linkedMapOf()
+        private val content: MutableList<String> = mutableListOf()
         var status: ToolCallStatus? = null
 
+        fun addContent(text: String) {
+            val normalized = text.trim()
+            if (normalized.isNotEmpty() && !content.contains(normalized)) {
+                content += normalized
+            }
+        }
+
         fun snapshot(): ToolCallSnapshot =
-            ToolCallSnapshot(id, name, LinkedHashMap(arguments), status)
+            ToolCallSnapshot(
+                id = id,
+                name = name,
+                title = title,
+                kind = kind,
+                arguments = LinkedHashMap(arguments),
+                status = status,
+                content = content.toList()
+            )
     }
 
     private class IdeClientSupport(

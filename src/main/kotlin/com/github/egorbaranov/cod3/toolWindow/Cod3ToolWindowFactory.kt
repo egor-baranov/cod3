@@ -3,7 +3,9 @@ package com.github.egorbaranov.cod3.toolWindow
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.github.egorbaranov.cod3.acp.AcpClientService
 import com.github.egorbaranov.cod3.acp.AcpStreamEvent
+import com.github.egorbaranov.cod3.acp.PlanEntryView
 import com.github.egorbaranov.cod3.acp.ToolCallSnapshot
+import com.agentclientprotocol.model.PlanEntryPriority
 import com.github.egorbaranov.cod3.completions.CompletionsRequestService
 import com.github.egorbaranov.cod3.completions.factory.AssistantMessage
 import com.github.egorbaranov.cod3.completions.factory.OpenAIRequestFactory
@@ -178,20 +180,27 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     ) {
         val acpService = project.service<AcpClientService>()
         val accumulatedText = StringBuilder()
-        val bubbleRef = AtomicReference<ChatBubble?>()
+        val textBubbleRef = AtomicReference<ChatBubble?>()
+        val planCardRef = AtomicReference<PlanCard?>()
+        val toolCards = mutableMapOf<String, ToolCard>()
 
         fun appendAssistantContent(chunk: String) =
-            appendStreamingAssistantNote(messageContainer, scroll, bubbleRef, accumulatedText, chunk)
+            appendStreamingAssistantNote(messageContainer, scroll, textBubbleRef, accumulatedText, chunk)
 
         acpService.sendPrompt(userMessage) { event ->
             when (event) {
                 is AcpStreamEvent.AgentContentText -> appendAssistantContent(event.text)
+                is AcpStreamEvent.PlanUpdate -> updatePlanBubble(
+                    messageContainer = messageContainer,
+                    scroll = scroll,
+                    planCardRef = planCardRef,
+                    entries = event.entries
+                )
                 is AcpStreamEvent.ToolCallUpdate -> handleAcpToolUpdate(
                     project = project,
                     messageContainer = messageContainer,
                     scroll = scroll,
-                    bubbleRef = bubbleRef,
-                    accumulatedText = accumulatedText,
+                    toolCards = toolCards,
                     snapshot = event.toolCall,
                     isFinal = event.final
                 )
@@ -212,50 +221,216 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         project: Project,
         messageContainer: JPanel,
         scroll: JBScrollPane,
-        bubbleRef: AtomicReference<ChatBubble?>,
-        accumulatedText: StringBuilder,
+        toolCards: MutableMap<String, ToolCard>,
         snapshot: ToolCallSnapshot,
         isFinal: Boolean
     ) {
-        val name = snapshot.name ?: snapshot.id
-        val statusLabel = snapshot.status?.name?.lowercase()
-
-        if (!isFinal) {
-            appendStreamingAssistantNote(
-                messageContainer,
-                scroll,
-                bubbleRef,
-                accumulatedText,
-                "\n\nTool $name status: ${statusLabel ?: "pending"}"
-            )
-            return
+        SwingUtilities.invokeLater {
+            val card = toolCards[snapshot.id] ?: run {
+                val created = createToolCard()
+                val bubble = messageContainer.addCustomBubble(created.panel)
+                created.bubble = bubble
+                toolCards[snapshot.id] = created
+                created
+            }
+            updateToolCard(card, snapshot)
+            scrollToBottom(scroll)
+            if (isFinal) {
+                toolCards.remove(snapshot.id)
+            }
         }
 
-        appendStreamingAssistantNote(
-            messageContainer,
-            scroll,
-            bubbleRef,
-            accumulatedText,
-            "\n\nTool $name completed."
-        )
+        if (!isFinal) return
 
+        val toolName = snapshot.name ?: return
         val toolCall = ToolCall(
-            name = snapshot.name,
+            name = toolName,
             arguments = snapshot.arguments.takeIf { it.isNotEmpty() }
         )
 
         val result = try {
             processToolCall(project, toolCall, messageContainer)
-                ?: "Tool ${toolCall.name ?: name} executed."
         } catch (e: Exception) {
-            logger.warn("Tool call '${toolCall.name ?: name}' failed", e)
-            "Error executing tool ${toolCall.name ?: name}: ${e.message}"
+            logger.warn("Tool call '${toolCall.name}' failed", e)
+            "Error executing tool ${toolCall.name}: ${e.message}"
         }
 
+        val message = result ?: "Tool ${toolCall.name} executed."
+
         SwingUtilities.invokeLater {
-            appendUserBubble(messageContainer, result)
+            appendUserBubble(messageContainer, message)
             scrollToBottom(scroll)
         }
+    }
+
+    private fun updatePlanBubble(
+        messageContainer: JPanel,
+        scroll: JBScrollPane,
+        planCardRef: AtomicReference<PlanCard?>,
+        entries: List<PlanEntryView>
+    ) {
+        SwingUtilities.invokeLater {
+            val existing = planCardRef.get()
+            if (entries.isEmpty()) {
+                existing?.let { card ->
+                    card.panel.isVisible = false
+                    card.bubble?.isVisible = false
+                }
+                refresh(messageContainer)
+                return@invokeLater
+            }
+
+            val card = existing ?: run {
+                val created = createPlanCard()
+                val bubble = messageContainer.addCustomBubble(created.panel)
+                created.bubble = bubble
+                planCardRef.set(created)
+                created
+            }
+
+            updatePlanCard(card, entries)
+            card.panel.isVisible = true
+            card.bubble?.isVisible = true
+            refresh(messageContainer)
+            scrollToBottom(scroll)
+        }
+    }
+
+    private fun createPlanCard(): PlanCard {
+        val headerLabel = JLabel("Plan").apply {
+            font = font.deriveFont(Font.BOLD.toFloat())
+        }
+        val stepsPanel = JBPanel<JBPanel<*>>(VerticalLayout(JBUI.scale(6))).apply {
+            isOpaque = false
+        }
+        val panel = JBPanel<JBPanel<*>>(VerticalLayout(JBUI.scale(8))).apply {
+            isOpaque = false
+            border = JBUI.Borders.empty(12)
+            add(headerLabel)
+            add(stepsPanel)
+        }
+        return PlanCard(panel, stepsPanel)
+    }
+
+    private fun updatePlanCard(card: PlanCard, entries: List<PlanEntryView>) {
+        while (card.stepRows.size > entries.size) {
+            val row = card.stepRows.removeAt(card.stepRows.size - 1)
+            card.stepsPanel.remove(row.container)
+        }
+        while (card.stepRows.size < entries.size) {
+            val row = createPlanStepRow()
+            card.stepRows.add(row)
+            card.stepsPanel.add(row.container)
+        }
+
+        entries.forEachIndexed { index, entry ->
+            val row = card.stepRows[index]
+            row.contentLabel.text = "${entry.order}. ${entry.content}"
+            val status = entry.status.name.lowercase().replace('_', ' ')
+            val priority = entry.priority.name.lowercase().replace('_', ' ')
+            row.metaLabel.text = if (entry.priority == PlanEntryPriority.MEDIUM) {
+                "Status: $status"
+            } else {
+                "Status: $status · Priority: $priority"
+            }
+        }
+
+        card.panel.revalidate()
+        card.panel.repaint()
+    }
+
+    private fun createPlanStepRow(): PlanStepRow {
+        val contentLabel = JLabel()
+        val metaLabel = JLabel().apply {
+            foreground = JBColor.GRAY
+            font = font.deriveFont(Font.ITALIC, font.size2D - 1f)
+        }
+        val container = JBPanel<JBPanel<*>>(VerticalLayout(JBUI.scale(2))).apply {
+            isOpaque = false
+            add(contentLabel)
+            add(metaLabel)
+        }
+        return PlanStepRow(container, contentLabel, metaLabel)
+    }
+
+    private fun createToolCard(): ToolCard {
+        val titleLabel = JLabel().apply {
+            font = font.deriveFont(Font.BOLD.toFloat())
+        }
+        val statusLabel = JLabel().apply {
+            foreground = JBColor.GRAY
+        }
+        val kindLabel = JLabel().apply {
+            foreground = JBColor.GRAY
+        }
+
+        val inputSection = createSectionPanel("Input")
+        val outputSection = createSectionPanel("Output")
+
+        val panel = JBPanel<JBPanel<*>>(VerticalLayout(JBUI.scale(6))).apply {
+            isOpaque = false
+            border = JBUI.Borders.empty(12)
+            add(titleLabel)
+            add(statusLabel)
+            add(kindLabel)
+            add(inputSection.container)
+            add(outputSection.container)
+        }
+
+        return ToolCard(panel, titleLabel, statusLabel, kindLabel, inputSection, outputSection)
+    }
+
+    private fun updateToolCard(card: ToolCard, snapshot: ToolCallSnapshot) {
+        card.titleLabel.text = snapshot.title?.takeIf { it.isNotBlank() } ?: snapshot.name ?: snapshot.id
+
+        val statusText = snapshot.status?.name?.lowercase()?.replace('_', ' ') ?: "unknown"
+        card.statusLabel.text = "Status: $statusText"
+        card.statusLabel.isVisible = true
+
+        snapshot.kind?.let {
+            card.kindLabel.text = "Kind: ${it.name.lowercase().replace('_', ' ')}"
+            card.kindLabel.isVisible = true
+        } ?: run {
+            card.kindLabel.isVisible = false
+        }
+
+        val inputs = snapshot.arguments.map { (key, value) -> "$key: $value" }
+        populateSection(card.inputSection, inputs)
+        populateSection(card.outputSection, snapshot.content.filter { it.isNotBlank() })
+
+        card.panel.revalidate()
+        card.panel.repaint()
+        card.bubble?.isVisible = true
+    }
+
+    private fun createSectionPanel(title: String): SectionPanel {
+        val titleLabel = JLabel(title).apply {
+            font = font.deriveFont(Font.BOLD.toFloat())
+        }
+        val itemsPanel = JBPanel<JBPanel<*>>(VerticalLayout(JBUI.scale(2))).apply {
+            isOpaque = false
+        }
+        val container = JBPanel<JBPanel<*>>(VerticalLayout(JBUI.scale(2))).apply {
+            isOpaque = false
+            add(titleLabel)
+            add(itemsPanel)
+            isVisible = false
+        }
+        return SectionPanel(container, itemsPanel)
+    }
+
+    private fun populateSection(section: SectionPanel, items: List<String>) {
+        section.itemsPanel.removeAll()
+        if (items.isEmpty()) {
+            section.container.isVisible = false
+        } else {
+            items.forEach {
+                section.itemsPanel.add(JLabel("\u2022 $it"))
+            }
+            section.container.isVisible = true
+        }
+        section.itemsPanel.revalidate()
+        section.itemsPanel.repaint()
     }
 
     private fun appendStreamingAssistantNote(
@@ -271,13 +446,40 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         SwingUtilities.invokeLater {
             val existing = bubbleRef.get()
             if (existing != null) {
-                existing.updateText(updatedText)
+                existing.updateText(updatedText, forceReplace = true)
             } else {
                 bubbleRef.set(appendAssistantBubble(messageContainer, updatedText))
             }
             scrollToBottom(scroll)
         }
     }
+
+    private class PlanCard(val panel: JPanel, val stepsPanel: JPanel) {
+        val stepRows: MutableList<PlanStepRow> = mutableListOf()
+        var bubble: JPanel? = null
+    }
+
+    private class PlanStepRow(
+        val container: JPanel,
+        val contentLabel: JLabel,
+        val metaLabel: JLabel
+    )
+
+    private class ToolCard(
+        val panel: JPanel,
+        val titleLabel: JLabel,
+        val statusLabel: JLabel,
+        val kindLabel: JLabel,
+        val inputSection: SectionPanel,
+        val outputSection: SectionPanel
+    ) {
+        var bubble: JPanel? = null
+    }
+
+    private class SectionPanel(
+        val container: JPanel,
+        val itemsPanel: JPanel
+    )
 
     private fun scrollToBottom(scroll: JBScrollPane) {
         with(scroll.verticalScrollBar) {
@@ -950,7 +1152,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
     }
 
-    private fun JPanel.addCustomBubble(component: JPanel) {
+    private fun JPanel.addCustomBubble(component: JPanel): JPanel {
         val container = this
         val bubble = object : JPanel(BorderLayout()) {
             init {
@@ -972,6 +1174,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
         container.add(bubble)
         refresh(container)
+        return bubble
     }
 
     private fun appendUserBubble(container: JPanel, text: String) {
