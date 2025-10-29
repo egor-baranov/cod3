@@ -1,17 +1,18 @@
 package com.github.egorbaranov.cod3.toolWindow
 
+import com.agentclientprotocol.model.PlanEntryPriority
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.github.egorbaranov.cod3.acp.AcpClientService
 import com.github.egorbaranov.cod3.acp.AcpStreamEvent
 import com.github.egorbaranov.cod3.acp.PlanEntryView
 import com.github.egorbaranov.cod3.acp.ToolCallSnapshot
-import com.agentclientprotocol.model.PlanEntryPriority
 import com.github.egorbaranov.cod3.completions.CompletionsRequestService
 import com.github.egorbaranov.cod3.completions.factory.AssistantMessage
 import com.github.egorbaranov.cod3.completions.factory.OpenAIRequestFactory
 import com.github.egorbaranov.cod3.completions.factory.ToolMessage
 import com.github.egorbaranov.cod3.completions.factory.UserMessage
 import com.github.egorbaranov.cod3.settings.PluginSettingsState
+import com.github.egorbaranov.cod3.toolWindow.chat.ChatTabController
 import com.github.egorbaranov.cod3.ui.Icons
 import com.github.egorbaranov.cod3.ui.components.*
 import com.github.egorbaranov.cod3.ui.createResizableEditor
@@ -21,13 +22,13 @@ import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.actionSystem.impl.ActionButton
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.components.service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.components.service
 import com.intellij.openapi.ui.SimpleToolWindowPanel
 import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.util.Key
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
@@ -50,24 +51,21 @@ import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
-import com.jetbrains.rd.swing.mouseClicked
 import ee.carlrobert.llm.client.openai.completion.ErrorDetails
 import ee.carlrobert.llm.client.openai.completion.OpenAIChatCompletionModel
-import ee.carlrobert.llm.client.openai.completion.request.OpenAIChatCompletionStandardMessage
+import ee.carlrobert.llm.client.openai.completion.request.OpenAIChatCompletionMessage
 import ee.carlrobert.llm.completion.CompletionEventListener
 import okhttp3.sse.EventSource
 import scaledBy
 import java.awt.*
-import java.awt.Component.LEFT_ALIGNMENT
 import java.awt.geom.Area
 import java.awt.geom.Rectangle2D
 import java.awt.geom.RoundRectangle2D
 import java.io.File
 import java.nio.file.Paths
+import java.util.concurrent.atomic.AtomicReference
 import java.util.regex.PatternSyntaxException
 import javax.swing.*
-import kotlin.math.max
-import java.util.concurrent.atomic.AtomicReference
 
 class Cod3ToolWindowFactory : ToolWindowFactory {
 
@@ -77,7 +75,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     private val logger = Logger.getInstance(Cod3ToolWindowFactory::class.java)
 
     var chatQuantity = 1
-    val messages = mutableMapOf<Int, MutableList<OpenAIChatCompletionStandardMessage>>()
+    val messages = mutableMapOf<Int, MutableList<OpenAIChatCompletionMessage>>()
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         toolWindow.title = "Cod3"
@@ -112,8 +110,9 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     private fun addChatTab(project: Project, toolWindow: ToolWindow) {
         chatQuantity++
 
+        val controller = ChatTabController(project, chatQuantity, messages, logger)
         val panel = SimpleToolWindowPanel(true, true).apply {
-            setContent(createChatPanel(project, chatQuantity))
+            setContent(controller.createPanel())
         }
 
         val content: Content = ContentFactory.getInstance()

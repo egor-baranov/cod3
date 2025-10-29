@@ -1,5 +1,6 @@
 package com.github.egorbaranov.cod3.completions.factory
 
+import ee.carlrobert.llm.client.openai.completion.request.OpenAIChatCompletionMessage
 import ee.carlrobert.llm.client.openai.completion.request.OpenAIChatCompletionRequest
 import ee.carlrobert.llm.client.openai.completion.request.OpenAIChatCompletionStandardMessage
 
@@ -9,7 +10,7 @@ class OpenAIRequestFactory {
     companion object {
 
         fun createBasicCompletionRequest(
-            messages: List<OpenAIChatCompletionStandardMessage>,
+            messages: List<OpenAIChatCompletionMessage>,
             model: String? = null,
             isStream: Boolean = false,
             overridenPath: String? = null
