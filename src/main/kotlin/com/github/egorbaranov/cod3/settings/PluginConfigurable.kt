@@ -8,7 +8,9 @@ import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.util.NlsContexts
 import com.intellij.ui.JBColor
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTextField
+import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
 import java.awt.BorderLayout
 import java.awt.Dimension
@@ -25,6 +27,11 @@ class PluginConfigurable : SearchableConfigurable {
 
     private lateinit var chatApiKeyField: JBTextField
     private lateinit var chatApiUrlField: JBTextField
+
+    private lateinit var useAcpCheckbox: JBCheckBox
+    private lateinit var acpCommandField: JBTextField
+    private lateinit var acpWorkingDirField: JBTextField
+    private lateinit var acpSessionRootField: JBTextField
 
     private var retryQuantityDropdown = ComboBox(arrayOf(1, 3, 5, 10, 20))
     private var indexingStepsDropdown = ComboBox(arrayOf(1, 2, 3))
@@ -55,6 +62,14 @@ class PluginConfigurable : SearchableConfigurable {
             it.text = PluginSettingsState.getInstance().openAIApiUrl
         }
 
+        useAcpCheckbox = JBCheckBox("Enable Agent Client Protocol").apply {
+            isSelected = settings.useAgentClientProtocol
+            addActionListener { updateAcpFieldsEnabled() }
+        }
+        acpCommandField = JBTextField(settings.acpAgentCommand, 40)
+        acpWorkingDirField = JBTextField(settings.acpAgentWorkingDirectory, 40)
+        acpSessionRootField = JBTextField(settings.acpSessionRoot, 40)
+
         mySettingsComponent = panel {
             group("Completion") {
                 row("API key") {
@@ -83,7 +98,26 @@ class PluginConfigurable : SearchableConfigurable {
                     cell(createModelComboBox())
                 }
             }
+
+            group("Agent Client Protocol") {
+                row {
+                    cell(useAcpCheckbox)
+                }
+
+                row("Agent command") {
+                    cell(acpCommandField).align(AlignX.FILL)
+                }
+
+                row("Working directory") {
+                    cell(acpWorkingDirField).align(AlignX.FILL)
+                }
+
+                row("Session root") {
+                    cell(acpSessionRootField).align(AlignX.FILL)
+                }
+            }
         }
+        updateAcpFieldsEnabled()
         return mySettingsComponent!!
     }
 
@@ -91,7 +125,11 @@ class PluginConfigurable : SearchableConfigurable {
         val settings = PluginSettingsState.getInstance()
         return completionApiKeyField.text != settings.openAIApiKey ||
                 completionApiUrlField.text != settings.openAIApiUrl ||
-                retryQuantityDropdown.item != settings.retryQuantity
+                retryQuantityDropdown.item != settings.retryQuantity ||
+                useAcpCheckbox.isSelected != settings.useAgentClientProtocol ||
+                acpCommandField.text != settings.acpAgentCommand ||
+                acpWorkingDirField.text != settings.acpAgentWorkingDirectory ||
+                acpSessionRootField.text != settings.acpSessionRoot
     }
 
     override fun apply() {
@@ -100,6 +138,10 @@ class PluginConfigurable : SearchableConfigurable {
         settings.openAIApiUrl = completionApiUrlField.text.takeIf { it.isNotEmpty() } ?: PluginSettingsState.DEFAULT_OPENAI_API_URL
         settings.retryQuantity = retryQuantityDropdown.item
         settings.indexingSteps = indexingStepsDropdown.item
+        settings.useAgentClientProtocol = useAcpCheckbox.isSelected
+        settings.acpAgentCommand = acpCommandField.text.trim()
+        settings.acpAgentWorkingDirectory = acpWorkingDirField.text.trim()
+        settings.acpSessionRoot = acpSessionRootField.text.trim()
     }
 
     override fun reset() {
@@ -108,6 +150,24 @@ class PluginConfigurable : SearchableConfigurable {
         completionApiUrlField.text = settings.openAIApiUrl
         retryQuantityDropdown.item = settings.retryQuantity
         indexingStepsDropdown.item = settings.indexingSteps
+        useAcpCheckbox.isSelected = settings.useAgentClientProtocol
+        acpCommandField.text = settings.acpAgentCommand
+        acpWorkingDirField.text = settings.acpAgentWorkingDirectory
+        acpSessionRootField.text = settings.acpSessionRoot
+        updateAcpFieldsEnabled()
+    }
+    
+    private fun updateAcpFieldsEnabled() {
+        val enabled = ::useAcpCheckbox.isInitialized && useAcpCheckbox.isSelected
+        if (::acpCommandField.isInitialized) {
+            acpCommandField.isEnabled = enabled
+        }
+        if (::acpWorkingDirField.isInitialized) {
+            acpWorkingDirField.isEnabled = enabled
+        }
+        if (::acpSessionRootField.isInitialized) {
+            acpSessionRootField.isEnabled = enabled
+        }
     }
 
     private fun buildStatPanel(titleText: String, mainText: String): JPanel {

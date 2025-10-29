@@ -1,11 +1,15 @@
 package com.github.egorbaranov.cod3.toolWindow
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.github.egorbaranov.cod3.acp.AcpClientService
+import com.github.egorbaranov.cod3.acp.AcpStreamEvent
+import com.github.egorbaranov.cod3.acp.ToolCallSnapshot
 import com.github.egorbaranov.cod3.completions.CompletionsRequestService
 import com.github.egorbaranov.cod3.completions.factory.AssistantMessage
 import com.github.egorbaranov.cod3.completions.factory.OpenAIRequestFactory
 import com.github.egorbaranov.cod3.completions.factory.ToolMessage
 import com.github.egorbaranov.cod3.completions.factory.UserMessage
+import com.github.egorbaranov.cod3.settings.PluginSettingsState
 import com.github.egorbaranov.cod3.ui.Icons
 import com.github.egorbaranov.cod3.ui.components.*
 import com.github.egorbaranov.cod3.ui.createResizableEditor
@@ -17,9 +21,11 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.components.service
 import com.intellij.openapi.ui.SimpleToolWindowPanel
 import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.util.Key
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
@@ -59,12 +65,14 @@ import java.nio.file.Paths
 import java.util.regex.PatternSyntaxException
 import javax.swing.*
 import kotlin.math.max
+import java.util.concurrent.atomic.AtomicReference
 
 class Cod3ToolWindowFactory : ToolWindowFactory {
 
     override fun shouldBeAvailable(project: Project): Boolean = true
     private var lookupPopup: JBPopup? = null
     private val list = JBList(listOf("Files & Folders", "Code", "Docs", "Git", "Web", "Recent Changes"))
+    private val logger = Logger.getInstance(Cod3ToolWindowFactory::class.java)
 
     var chatQuantity = 1
     val messages = mutableMapOf<Int, MutableList<OpenAIChatCompletionStandardMessage>>()
@@ -158,6 +166,124 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         return JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(8)
             add(scroll, BorderLayout.CENTER)
+        }
+    }
+
+    private fun sendMessageViaAcp(
+        project: Project,
+        _chatIndex: Int,
+        userMessage: String,
+        messageContainer: JPanel,
+        scroll: JBScrollPane
+    ) {
+        val acpService = project.service<AcpClientService>()
+        val accumulatedText = StringBuilder()
+        val bubbleRef = AtomicReference<ChatBubble?>()
+
+        fun appendAssistantContent(chunk: String) =
+            appendStreamingAssistantNote(messageContainer, scroll, bubbleRef, accumulatedText, chunk)
+
+        acpService.sendPrompt(userMessage) { event ->
+            when (event) {
+                is AcpStreamEvent.AgentContentText -> appendAssistantContent(event.text)
+                is AcpStreamEvent.ToolCallUpdate -> handleAcpToolUpdate(
+                    project = project,
+                    messageContainer = messageContainer,
+                    scroll = scroll,
+                    bubbleRef = bubbleRef,
+                    accumulatedText = accumulatedText,
+                    snapshot = event.toolCall,
+                    isFinal = event.final
+                )
+
+                is AcpStreamEvent.Completed -> {
+                    appendAssistantContent("")
+                }
+
+                is AcpStreamEvent.Error -> {
+                    val errorMessage = event.throwable.message ?: event.throwable.javaClass.simpleName
+                    appendAssistantContent("\n\nError: $errorMessage")
+                }
+            }
+        }
+    }
+
+    private fun handleAcpToolUpdate(
+        project: Project,
+        messageContainer: JPanel,
+        scroll: JBScrollPane,
+        bubbleRef: AtomicReference<ChatBubble?>,
+        accumulatedText: StringBuilder,
+        snapshot: ToolCallSnapshot,
+        isFinal: Boolean
+    ) {
+        val name = snapshot.name ?: snapshot.id
+        val statusLabel = snapshot.status?.name?.lowercase()
+
+        if (!isFinal) {
+            appendStreamingAssistantNote(
+                messageContainer,
+                scroll,
+                bubbleRef,
+                accumulatedText,
+                "\n\nTool $name status: ${statusLabel ?: "pending"}"
+            )
+            return
+        }
+
+        appendStreamingAssistantNote(
+            messageContainer,
+            scroll,
+            bubbleRef,
+            accumulatedText,
+            "\n\nTool $name completed."
+        )
+
+        val toolCall = ToolCall(
+            name = snapshot.name,
+            arguments = snapshot.arguments.takeIf { it.isNotEmpty() }
+        )
+
+        val result = try {
+            processToolCall(project, toolCall, messageContainer)
+                ?: "Tool ${toolCall.name ?: name} executed."
+        } catch (e: Exception) {
+            logger.warn("Tool call '${toolCall.name ?: name}' failed", e)
+            "Error executing tool ${toolCall.name ?: name}: ${e.message}"
+        }
+
+        SwingUtilities.invokeLater {
+            appendUserBubble(messageContainer, result)
+            scrollToBottom(scroll)
+        }
+    }
+
+    private fun appendStreamingAssistantNote(
+        messageContainer: JPanel,
+        scroll: JBScrollPane,
+        bubbleRef: AtomicReference<ChatBubble?>,
+        accumulatedText: StringBuilder,
+        note: String
+    ) {
+        if (note.isEmpty()) return
+        accumulatedText.append(note)
+        val updatedText = accumulatedText.toString()
+        SwingUtilities.invokeLater {
+            val existing = bubbleRef.get()
+            if (existing != null) {
+                existing.updateText(updatedText)
+            } else {
+                bubbleRef.set(appendAssistantBubble(messageContainer, updatedText))
+            }
+            scrollToBottom(scroll)
+        }
+    }
+
+    private fun scrollToBottom(scroll: JBScrollPane) {
+        with(scroll.verticalScrollBar) {
+            if (value >= maximum - 20) {
+                value = maximum
+            }
         }
     }
 
@@ -329,6 +455,20 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                         value = maximum
                     }
                 }
+            }
+
+            val settingsState = PluginSettingsState.getInstance()
+            if (settingsState.useAgentClientProtocol) {
+                if (text != null) {
+                    sendMessageViaAcp(
+                        project,
+                        chatIndex,
+                        text,
+                        messageContainer,
+                        scroll
+                    )
+                }
+                return
             }
 
             if (messages[chatIndex] == null) {

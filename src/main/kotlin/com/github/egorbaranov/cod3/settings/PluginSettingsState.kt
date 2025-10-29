@@ -34,6 +34,11 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
     var retryQuantity: Int = 1
     var indexingSteps: Int = 1
 
+    var useAgentClientProtocol: Boolean = false
+    var acpAgentCommand: String = ""
+    var acpAgentWorkingDirectory: String = ""
+    var acpSessionRoot: String = ""
+
     override fun getState(): PluginSettingsState = this
 
     override fun loadState(state: PluginSettingsState) {
@@ -43,6 +48,24 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
     fun copyStateTo(target: PluginSettingsState) {
         target.openAIApiKey = this.openAIApiKey
         target.openAIApiUrl = this.openAIApiUrl
+        target.googleApiKey = this.googleApiKey
+        target.googleApiUrl = this.googleApiUrl
+        target.googleModel = this.googleModel
+        target.claudeApiKey = this.claudeApiKey
+        target.claudeApiVersion = this.claudeApiVersion
+        target.claudeApiUrl = this.claudeApiUrl
+        target.ollamaApiKey = this.ollamaApiKey
+        target.ollamaApiUrl = this.ollamaApiUrl
+        target.ollamaPort = this.ollamaPort
+        target.llamaApiKey = this.llamaApiKey
+        target.llamaApiUrl = this.llamaApiUrl
+        target.llamaPort = this.llamaPort
+        target.retryQuantity = this.retryQuantity
+        target.indexingSteps = this.indexingSteps
+        target.useAgentClientProtocol = this.useAgentClientProtocol
+        target.acpAgentCommand = this.acpAgentCommand
+        target.acpAgentWorkingDirectory = this.acpAgentWorkingDirectory
+        target.acpSessionRoot = this.acpSessionRoot
     }
 
     companion object {
