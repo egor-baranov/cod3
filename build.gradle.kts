@@ -41,7 +41,7 @@ repositories {
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // implementation("io.modelcontextprotocol:kotlin-sdk:latest")
-    implementation("ee.carlrobert:llm-client:0.8.43")
+    implementation("ee.carlrobert:llm-client:0.8.55")
     implementation("com.agentclientprotocol:acp:0.4.0")
     implementation("ai.koog:koog-agents:0.5.2")
     implementation(kotlin("reflect"))
