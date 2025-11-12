@@ -1,5 +1,6 @@
 package com.github.egorbaranov.cod3.settings
 
+import com.github.egorbaranov.cod3.koog.KoogModelCatalog
 import com.github.egorbaranov.cod3.ui.components.createModelComboBox
 import com.github.egorbaranov.cod3.util.UIUtils
 import com.intellij.openapi.options.SearchableConfigurable
@@ -9,10 +10,13 @@ import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.util.NlsContexts
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBCheckBox
+import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
 import java.awt.BorderLayout
+import java.awt.Component
 import java.awt.Dimension
 import java.awt.Font
 import java.awt.GridBagLayout
@@ -27,6 +31,13 @@ class PluginConfigurable : SearchableConfigurable {
 
     private lateinit var chatApiKeyField: JBTextField
     private lateinit var chatApiUrlField: JBTextField
+
+    private lateinit var useKoogCheckbox: JBCheckBox
+    private lateinit var koogPromptArea: JBTextArea
+    private lateinit var koogModelCombo: ComboBox<KoogModelCatalog.Entry>
+    private lateinit var koogMcpCommandField: JBTextField
+    private lateinit var koogMcpWorkingDirField: JBTextField
+    private lateinit var koogMcpClientNameField: JBTextField
 
     private lateinit var useAcpCheckbox: JBCheckBox
     private lateinit var acpCommandField: JBTextField
@@ -61,6 +72,37 @@ class PluginConfigurable : SearchableConfigurable {
         chatApiUrlField = JBTextField(settings.openAIApiUrl, 40).also {
             it.text = PluginSettingsState.getInstance().openAIApiUrl
         }
+
+        useKoogCheckbox = JBCheckBox("Enable Koog agent (experimental)").apply {
+            isSelected = settings.useKoogAgents
+            addActionListener { updateKoogFieldsEnabled() }
+        }
+        koogPromptArea = JBTextArea(settings.koogSystemPrompt, 3, 40)
+        koogModelCombo = ComboBox(KoogModelCatalog.availableModels.toTypedArray()).apply {
+            renderer = object : ListCellRenderer<KoogModelCatalog.Entry> {
+                private val delegate = DefaultListCellRenderer()
+                override fun getListCellRendererComponent(
+                    list: JList<out KoogModelCatalog.Entry>?,
+                    value: KoogModelCatalog.Entry?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean
+                ): Component {
+                    return delegate.getListCellRendererComponent(
+                        list,
+                        value?.label ?: "Select model",
+                        index,
+                        isSelected,
+                        cellHasFocus
+                    )
+                }
+            }
+            selectedItem = KoogModelCatalog.availableModels.firstOrNull { it.id == settings.koogModelId }
+                ?: KoogModelCatalog.availableModels.first()
+        }
+        koogMcpCommandField = JBTextField(settings.koogMcpCommand, 40)
+        koogMcpWorkingDirField = JBTextField(settings.koogMcpWorkingDirectory, 40)
+        koogMcpClientNameField = JBTextField(settings.koogMcpClientName, 40)
 
         useAcpCheckbox = JBCheckBox("Enable Agent Client Protocol").apply {
             isSelected = settings.useAgentClientProtocol
@@ -99,6 +141,34 @@ class PluginConfigurable : SearchableConfigurable {
                 }
             }
 
+            group("Koog Agent (experimental)") {
+                row {
+                    cell(useKoogCheckbox)
+                }
+
+                row("System prompt") {
+                    cell(JBScrollPane(koogPromptArea).apply {
+                        preferredSize = Dimension(0, 80)
+                    }).align(AlignX.FILL)
+                }
+
+                row("Model") {
+                    cell(koogModelCombo).align(AlignX.FILL)
+                }
+
+                row("MCP command") {
+                    cell(koogMcpCommandField).align(AlignX.FILL)
+                }
+
+                row("MCP working directory") {
+                    cell(koogMcpWorkingDirField).align(AlignX.FILL)
+                }
+
+                row("MCP client name") {
+                    cell(koogMcpClientNameField).align(AlignX.FILL)
+                }
+            }
+
             group("Agent Client Protocol") {
                 row {
                     cell(useAcpCheckbox)
@@ -117,6 +187,7 @@ class PluginConfigurable : SearchableConfigurable {
                 }
             }
         }
+        updateKoogFieldsEnabled()
         updateAcpFieldsEnabled()
         return mySettingsComponent!!
     }
@@ -126,6 +197,12 @@ class PluginConfigurable : SearchableConfigurable {
         return completionApiKeyField.text != settings.openAIApiKey ||
                 completionApiUrlField.text != settings.openAIApiUrl ||
                 retryQuantityDropdown.item != settings.retryQuantity ||
+                useKoogCheckbox.isSelected != settings.useKoogAgents ||
+                koogPromptArea.text != settings.koogSystemPrompt ||
+                (koogModelCombo.selectedItem as? KoogModelCatalog.Entry)?.id != settings.koogModelId ||
+                koogMcpCommandField.text != settings.koogMcpCommand ||
+                koogMcpWorkingDirField.text != settings.koogMcpWorkingDirectory ||
+                koogMcpClientNameField.text != settings.koogMcpClientName ||
                 useAcpCheckbox.isSelected != settings.useAgentClientProtocol ||
                 acpCommandField.text != settings.acpAgentCommand ||
                 acpWorkingDirField.text != settings.acpAgentWorkingDirectory ||
@@ -138,6 +215,12 @@ class PluginConfigurable : SearchableConfigurable {
         settings.openAIApiUrl = completionApiUrlField.text.takeIf { it.isNotEmpty() } ?: PluginSettingsState.DEFAULT_OPENAI_API_URL
         settings.retryQuantity = retryQuantityDropdown.item
         settings.indexingSteps = indexingStepsDropdown.item
+        settings.useKoogAgents = useKoogCheckbox.isSelected
+        settings.koogSystemPrompt = koogPromptArea.text.trim()
+        settings.koogModelId = (koogModelCombo.selectedItem as? KoogModelCatalog.Entry)?.id ?: settings.koogModelId
+        settings.koogMcpCommand = koogMcpCommandField.text.trim()
+        settings.koogMcpWorkingDirectory = koogMcpWorkingDirField.text.trim()
+        settings.koogMcpClientName = koogMcpClientNameField.text.trim().ifEmpty { "cod3-koog-mcp" }
         settings.useAgentClientProtocol = useAcpCheckbox.isSelected
         settings.acpAgentCommand = acpCommandField.text.trim()
         settings.acpAgentWorkingDirectory = acpWorkingDirField.text.trim()
@@ -150,10 +233,18 @@ class PluginConfigurable : SearchableConfigurable {
         completionApiUrlField.text = settings.openAIApiUrl
         retryQuantityDropdown.item = settings.retryQuantity
         indexingStepsDropdown.item = settings.indexingSteps
+        useKoogCheckbox.isSelected = settings.useKoogAgents
+        koogPromptArea.text = settings.koogSystemPrompt
+        koogModelCombo.selectedItem = KoogModelCatalog.availableModels.firstOrNull { it.id == settings.koogModelId }
+            ?: KoogModelCatalog.availableModels.first()
+        koogMcpCommandField.text = settings.koogMcpCommand
+        koogMcpWorkingDirField.text = settings.koogMcpWorkingDirectory
+        koogMcpClientNameField.text = settings.koogMcpClientName
         useAcpCheckbox.isSelected = settings.useAgentClientProtocol
         acpCommandField.text = settings.acpAgentCommand
         acpWorkingDirField.text = settings.acpAgentWorkingDirectory
         acpSessionRootField.text = settings.acpSessionRoot
+        updateKoogFieldsEnabled()
         updateAcpFieldsEnabled()
     }
     
@@ -167,6 +258,25 @@ class PluginConfigurable : SearchableConfigurable {
         }
         if (::acpSessionRootField.isInitialized) {
             acpSessionRootField.isEnabled = enabled
+        }
+    }
+
+    private fun updateKoogFieldsEnabled() {
+        val enabled = ::useKoogCheckbox.isInitialized && useKoogCheckbox.isSelected
+        if (::koogPromptArea.isInitialized) {
+            koogPromptArea.isEnabled = enabled
+        }
+        if (::koogModelCombo.isInitialized) {
+            koogModelCombo.isEnabled = enabled
+        }
+        if (::koogMcpCommandField.isInitialized) {
+            koogMcpCommandField.isEnabled = enabled
+        }
+        if (::koogMcpWorkingDirField.isInitialized) {
+            koogMcpWorkingDirField.isEnabled = enabled
+        }
+        if (::koogMcpClientNameField.isInitialized) {
+            koogMcpClientNameField.isEnabled = enabled
         }
     }
 

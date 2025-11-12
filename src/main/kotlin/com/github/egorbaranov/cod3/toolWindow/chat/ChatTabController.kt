@@ -4,6 +4,8 @@ import com.github.egorbaranov.cod3.acp.AcpClientService
 import com.github.egorbaranov.cod3.acp.AcpStreamEvent
 import com.github.egorbaranov.cod3.completions.CompletionsRequestService
 import com.github.egorbaranov.cod3.completions.factory.UserMessage
+import com.github.egorbaranov.cod3.koog.KoogStreamEvent
+import com.github.egorbaranov.cod3.koog.koogAgentService
 import com.github.egorbaranov.cod3.settings.PluginSettingsState
 import com.github.egorbaranov.cod3.toolWindow.Content
 import com.github.egorbaranov.cod3.toolWindow.SSEParser
@@ -110,12 +112,19 @@ internal class ChatTabController(
             }
 
             val settings = PluginSettingsState.getInstance()
-            if (settings.useAgentClientProtocol) {
-                text?.let { sendMessageViaAcp(it) }
-                return
-            }
+            when {
+                settings.useKoogAgents && text != null -> {
+                    sendMessageViaKoog(text)
+                    return
+                }
 
-            sendMessageViaOpenAi(text ?: "")
+                settings.useAgentClientProtocol -> {
+                    text?.let { sendMessageViaAcp(it) }
+                    return
+                }
+
+                else -> sendMessageViaOpenAi(text ?: "")
+            }
         }
     }
 
@@ -129,19 +138,27 @@ internal class ChatTabController(
             }
             textBubbleRef.set(null)
         }
+
         val service = project.service<AcpClientService>()
 
         service.sendPrompt(userMessage) { event ->
             when (event) {
-                is AcpStreamEvent.AgentContentText -> appendStreamingAssistant(accumulatedText, textBubbleRef, event.text)
+                is AcpStreamEvent.AgentContentText -> appendStreamingAssistant(
+                    accumulatedText,
+                    textBubbleRef,
+                    event.text
+                )
+
                 is AcpStreamEvent.PlanUpdate -> {
                     finalizeAssistantBubble()
                     planRenderer.render(event.entries)
                 }
+
                 is AcpStreamEvent.ToolCallUpdate -> {
                     finalizeAssistantBubble()
                     handleAcpToolUpdate(event)
                 }
+
                 is AcpStreamEvent.Completed -> appendStreamingAssistant(accumulatedText, textBubbleRef, "")
                 is AcpStreamEvent.Error -> {
                     val errorMessage = event.throwable.message ?: event.throwable.javaClass.simpleName
@@ -171,7 +188,7 @@ internal class ChatTabController(
     }
 
     private fun handleAcpToolUpdate(event: AcpStreamEvent.ToolCallUpdate) {
-        toolRenderer.render(event.toolCall, event.final)
+        toolRenderer.render(event.toolCall.toViewModel(), event.final)
         if (!event.final) return
 
         val toolName = event.toolCall.name ?: return
@@ -377,5 +394,30 @@ internal class ChatTabController(
         }.andTransparent().withBorder(JBUI.Borders.empty(0, 4))
 
         add(footer, BorderLayout.SOUTH)
+    }
+
+    private fun sendMessageViaKoog(userMessage: String) {
+        val accumulatedText = StringBuilder()
+        val bubbleRef = AtomicReference<com.github.egorbaranov.cod3.ui.components.ChatBubble?>()
+
+        project.koogAgentService().run(chatIndex, userMessage) { event ->
+            when (event) {
+                is KoogStreamEvent.ContentDelta -> appendStreamingAssistant(accumulatedText, bubbleRef, event.text)
+                is KoogStreamEvent.ToolCallUpdate -> {
+                    toolRenderer.render(event.snapshot.toViewModel(), event.final)
+                }
+
+                is KoogStreamEvent.Completed -> {
+                    if (accumulatedText.isEmpty()) {
+                        appendStreamingAssistant(accumulatedText, bubbleRef, event.response)
+                    }
+                }
+
+                is KoogStreamEvent.Error -> {
+                    val errorMessage = event.throwable.message ?: event.throwable.javaClass.simpleName
+                    appendStreamingAssistant(accumulatedText, bubbleRef, "\n\nError: $errorMessage")
+                }
+            }
+        }
     }
 }

@@ -34,6 +34,13 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
     var retryQuantity: Int = 1
     var indexingSteps: Int = 1
 
+    var useKoogAgents: Boolean = false
+    var koogSystemPrompt: String = DEFAULT_KOOG_SYSTEM_PROMPT
+    var koogModelId: String = DEFAULT_KOOG_MODEL_ID
+    var koogMcpCommand: String = ""
+    var koogMcpWorkingDirectory: String = ""
+    var koogMcpClientName: String = "cod3-koog-mcp"
+
     var useAgentClientProtocol: Boolean = false
     var acpAgentCommand: String = ""
     var acpAgentWorkingDirectory: String = ""
@@ -62,6 +69,12 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
         target.llamaPort = this.llamaPort
         target.retryQuantity = this.retryQuantity
         target.indexingSteps = this.indexingSteps
+        target.useKoogAgents = this.useKoogAgents
+        target.koogSystemPrompt = this.koogSystemPrompt
+        target.koogModelId = this.koogModelId
+        target.koogMcpCommand = this.koogMcpCommand
+        target.koogMcpWorkingDirectory = this.koogMcpWorkingDirectory
+        target.koogMcpClientName = this.koogMcpClientName
         target.useAgentClientProtocol = this.useAgentClientProtocol
         target.acpAgentCommand = this.acpAgentCommand
         target.acpAgentWorkingDirectory = this.acpAgentWorkingDirectory
@@ -70,6 +83,9 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
 
     companion object {
         const val DEFAULT_OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+        private const val DEFAULT_KOOG_SYSTEM_PROMPT =
+            "You are Cod3, an IDE-native coding assistant focused on practical, minimal changes."
+        private const val DEFAULT_KOOG_MODEL_ID = "gpt-4o-mini"
 
         fun getInstance(): PluginSettingsState =
             ApplicationManager.getApplication().getService(PluginSettingsState::class.java)

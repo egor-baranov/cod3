@@ -1,6 +1,5 @@
 package com.github.egorbaranov.cod3.toolWindow.chat
 
-import com.github.egorbaranov.cod3.acp.ToolCallSnapshot
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.panels.VerticalLayout
@@ -17,18 +16,18 @@ internal class ToolRenderer(
 
     private val cards = mutableMapOf<String, ToolCard>()
 
-    fun render(snapshot: ToolCallSnapshot, isFinal: Boolean) {
-        val card = cards[snapshot.id] ?: createToolCard().also { created ->
+    fun render(viewModel: ToolCallViewModel, isFinal: Boolean) {
+        val card = cards[viewModel.id] ?: createToolCard().also { created ->
             val bubble = messageContainer.addChatBubble(created.panel, TOOL_BUBBLE_COLOR)
             created.bubble = bubble
-            cards[snapshot.id] = created
+            cards[viewModel.id] = created
         }
 
-        updateCard(card, snapshot)
+        updateCard(card, viewModel)
         scrollToBottom(scroll)
 
         if (isFinal) {
-            cards.remove(snapshot.id)
+            cards.remove(viewModel.id)
         }
     }
 
@@ -55,20 +54,20 @@ internal class ToolRenderer(
         return ToolCard(panel, titleLabel, statusLabel, kindLabel, inputSection, outputSection)
     }
 
-    private fun updateCard(card: ToolCard, snapshot: ToolCallSnapshot) {
+    private fun updateCard(card: ToolCard, snapshot: ToolCallViewModel) {
         card.titleLabel.text = snapshot.title?.takeIf { it.isNotBlank() } ?: snapshot.name ?: snapshot.id
 
-        val statusText = snapshot.status?.name?.lowercase()?.replace('_', ' ') ?: "unknown"
+        val statusText = snapshot.statusText ?: "unknown"
         card.statusLabel.text = "Status: $statusText"
         card.statusLabel.isVisible = true
 
-        snapshot.kind?.let {
-            card.kindLabel.text = "Kind: ${it.name.lowercase().replace('_', ' ')}"
+        snapshot.kindText?.let {
+            card.kindLabel.text = "Kind: ${it.lowercase()}"
             card.kindLabel.isVisible = true
         } ?: run { card.kindLabel.isVisible = false }
 
         card.inputSection.populate(snapshot.arguments.map { (key, value) -> "$key: $value" })
-        card.outputSection.populate(snapshot.content.filter { it.isNotBlank() })
+        card.outputSection.populate(snapshot.output.filter { it.isNotBlank() })
 
         card.panel.revalidate()
         card.panel.repaint()
