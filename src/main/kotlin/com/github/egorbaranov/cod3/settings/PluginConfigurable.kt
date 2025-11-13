@@ -26,11 +26,13 @@ class PluginConfigurable : SearchableConfigurable {
 
     private var mySettingsComponent: JPanel? = null
 
-    private lateinit var completionApiKeyField: JBTextField
-    private lateinit var completionApiUrlField: JBTextField
-
-    private lateinit var chatApiKeyField: JBTextField
-    private lateinit var chatApiUrlField: JBTextField
+    private lateinit var openAiApiKeyField: JBTextField
+    private lateinit var openAiApiUrlField: JBTextField
+    private lateinit var anthropicApiKeyField: JBTextField
+    private lateinit var anthropicApiUrlField: JBTextField
+    private lateinit var anthropicApiVersionField: JBTextField
+    private lateinit var googleApiKeyField: JBTextField
+    private lateinit var googleApiUrlField: JBTextField
 
     private lateinit var useKoogCheckbox: JBCheckBox
     private lateinit var koogPromptArea: JBTextArea
@@ -59,19 +61,22 @@ class PluginConfigurable : SearchableConfigurable {
 
     override fun createComponent(): JComponent {
         val settings = PluginSettingsState.getInstance()
-        completionApiKeyField = JBTextField(settings.openAIApiKey, 40).also {
-            it.text = PluginSettingsState.getInstance().openAIApiKey
-        }
-        completionApiUrlField = JBTextField(settings.openAIApiUrl, 40).also {
-            it.text = PluginSettingsState.getInstance().openAIApiUrl
-        }
-
-        chatApiKeyField = JBTextField(settings.openAIApiKey, 40).also {
-            it.text = PluginSettingsState.getInstance().openAIApiKey
-        }
-        chatApiUrlField = JBTextField(settings.openAIApiUrl, 40).also {
-            it.text = PluginSettingsState.getInstance().openAIApiUrl
-        }
+        openAiApiKeyField = JBTextField(settings.openAIApiKey, 40)
+        openAiApiUrlField = JBTextField(settings.openAIApiUrl, 40)
+        anthropicApiKeyField = JBTextField(settings.claudeApiKey, 40)
+        anthropicApiUrlField = JBTextField(
+            settings.claudeApiUrl.ifBlank { PluginSettingsState.DEFAULT_ANTHROPIC_API_URL },
+            40
+        )
+        anthropicApiVersionField = JBTextField(
+            settings.claudeApiVersion.ifBlank { PluginSettingsState.DEFAULT_ANTHROPIC_API_VERSION },
+            20
+        )
+        googleApiKeyField = JBTextField(settings.googleApiKey, 40)
+        googleApiUrlField = JBTextField(
+            settings.googleApiUrl.ifBlank { PluginSettingsState.DEFAULT_GOOGLE_API_URL },
+            40
+        )
 
         useKoogCheckbox = JBCheckBox("Enable Koog agent (experimental)").apply {
             isSelected = settings.useKoogAgents
@@ -88,13 +93,17 @@ class PluginConfigurable : SearchableConfigurable {
                     isSelected: Boolean,
                     cellHasFocus: Boolean
                 ): Component {
-                    return delegate.getListCellRendererComponent(
+                    val component = delegate.getListCellRendererComponent(
                         list,
                         value?.label ?: "Select model",
                         index,
                         isSelected,
                         cellHasFocus
                     )
+                    if (component is JLabel) {
+                        component.icon = value?.provider?.icon
+                    }
+                    return component
                 }
             }
             selectedItem = KoogModelCatalog.availableModels.firstOrNull { it.id == settings.koogModelId }
@@ -113,35 +122,43 @@ class PluginConfigurable : SearchableConfigurable {
         acpSessionRootField = JBTextField(settings.acpSessionRoot, 40)
 
         mySettingsComponent = panel {
-            group("Completion") {
-                row("API key") {
-                    cell(completionApiKeyField)
-                }
-
-                row("API url") {
-                    cell(completionApiUrlField)
-                }
-
+            group("Model Configuration") {
                 row("Model") {
                     cell(createModelComboBox())
                 }
             }
 
-            group("Chat") {
+            group("OpenAI Credentials") {
                 row("API key") {
-                    cell(chatApiKeyField)
+                    cell(openAiApiKeyField)
                 }
-
-                row("API url") {
-                    cell(chatApiUrlField)
-                }
-
-                row("Model") {
-                    cell(createModelComboBox())
+                row("Base URL") {
+                    cell(openAiApiUrlField)
                 }
             }
 
-            group("Koog Agent (experimental)") {
+            group("Anthropic (Claude) Credentials") {
+                row("API key") {
+                    cell(anthropicApiKeyField)
+                }
+                row("Base URL") {
+                    cell(anthropicApiUrlField)
+                }
+                row("API version") {
+                    cell(anthropicApiVersionField)
+                }
+            }
+
+            group("Google Gemini Credentials") {
+                row("API key") {
+                    cell(googleApiKeyField)
+                }
+                row("Base URL") {
+                    cell(googleApiUrlField)
+                }
+            }
+
+            group("Agent Configuration") {
                 row {
                     cell(useKoogCheckbox)
                 }
@@ -194,8 +211,13 @@ class PluginConfigurable : SearchableConfigurable {
 
     override fun isModified(): Boolean {
         val settings = PluginSettingsState.getInstance()
-        return completionApiKeyField.text != settings.openAIApiKey ||
-                completionApiUrlField.text != settings.openAIApiUrl ||
+        return openAiApiKeyField.text != settings.openAIApiKey ||
+                openAiApiUrlField.text != settings.openAIApiUrl ||
+                anthropicApiKeyField.text != settings.claudeApiKey ||
+                anthropicApiUrlField.text != settings.claudeApiUrl ||
+                anthropicApiVersionField.text != settings.claudeApiVersion ||
+                googleApiKeyField.text != settings.googleApiKey ||
+                googleApiUrlField.text != settings.googleApiUrl ||
                 retryQuantityDropdown.item != settings.retryQuantity ||
                 useKoogCheckbox.isSelected != settings.useKoogAgents ||
                 koogPromptArea.text != settings.koogSystemPrompt ||
@@ -211,8 +233,13 @@ class PluginConfigurable : SearchableConfigurable {
 
     override fun apply() {
         val settings = PluginSettingsState.getInstance()
-        settings.openAIApiKey = completionApiKeyField.text
-        settings.openAIApiUrl = completionApiUrlField.text.takeIf { it.isNotEmpty() } ?: PluginSettingsState.DEFAULT_OPENAI_API_URL
+        settings.openAIApiKey = openAiApiKeyField.text.trim()
+        settings.openAIApiUrl = openAiApiUrlField.text.trim().ifEmpty { PluginSettingsState.DEFAULT_OPENAI_API_URL }
+        settings.claudeApiKey = anthropicApiKeyField.text.trim()
+        settings.claudeApiUrl = anthropicApiUrlField.text.trim().ifEmpty { PluginSettingsState.DEFAULT_ANTHROPIC_API_URL }
+        settings.claudeApiVersion = anthropicApiVersionField.text.trim().ifEmpty { PluginSettingsState.DEFAULT_ANTHROPIC_API_VERSION }
+        settings.googleApiKey = googleApiKeyField.text.trim()
+        settings.googleApiUrl = googleApiUrlField.text.trim().ifEmpty { PluginSettingsState.DEFAULT_GOOGLE_API_URL }
         settings.retryQuantity = retryQuantityDropdown.item
         settings.indexingSteps = indexingStepsDropdown.item
         settings.useKoogAgents = useKoogCheckbox.isSelected
@@ -229,8 +256,13 @@ class PluginConfigurable : SearchableConfigurable {
 
     override fun reset() {
         val settings = PluginSettingsState.getInstance()
-        completionApiKeyField.text = settings.openAIApiKey
-        completionApiUrlField.text = settings.openAIApiUrl
+        openAiApiKeyField.text = settings.openAIApiKey
+        openAiApiUrlField.text = settings.openAIApiUrl
+        anthropicApiKeyField.text = settings.claudeApiKey
+        anthropicApiUrlField.text = settings.claudeApiUrl.ifBlank { PluginSettingsState.DEFAULT_ANTHROPIC_API_URL }
+        anthropicApiVersionField.text = settings.claudeApiVersion.ifBlank { PluginSettingsState.DEFAULT_ANTHROPIC_API_VERSION }
+        googleApiKeyField.text = settings.googleApiKey
+        googleApiUrlField.text = settings.googleApiUrl.ifBlank { PluginSettingsState.DEFAULT_GOOGLE_API_URL }
         retryQuantityDropdown.item = settings.retryQuantity
         indexingStepsDropdown.item = settings.indexingSteps
         useKoogCheckbox.isSelected = settings.useKoogAgents

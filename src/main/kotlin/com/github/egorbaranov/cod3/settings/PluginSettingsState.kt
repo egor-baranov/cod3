@@ -1,10 +1,10 @@
 package com.github.egorbaranov.cod3.settings
 
+import com.github.egorbaranov.cod3.koog.KoogModelCatalog
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
-import ee.carlrobert.llm.client.google.models.GoogleModel
 
 @State(
     name = "MyPluginSettings",
@@ -17,7 +17,6 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
 
     var googleApiKey: String = ""
     var googleApiUrl: String = ""
-    var googleModel: GoogleModel = GoogleModel.GEMINI_2_5_PRO_EXP
 
     var claudeApiKey: String = ""
     var claudeApiVersion: String = ""
@@ -57,7 +56,6 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
         target.openAIApiUrl = this.openAIApiUrl
         target.googleApiKey = this.googleApiKey
         target.googleApiUrl = this.googleApiUrl
-        target.googleModel = this.googleModel
         target.claudeApiKey = this.claudeApiKey
         target.claudeApiVersion = this.claudeApiVersion
         target.claudeApiUrl = this.claudeApiUrl
@@ -83,9 +81,12 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
 
     companion object {
         const val DEFAULT_OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+        const val DEFAULT_ANTHROPIC_API_URL = "https://api.anthropic.com"
+        const val DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
+        const val DEFAULT_GOOGLE_API_URL = "https://generativelanguage.googleapis.com"
         private const val DEFAULT_KOOG_SYSTEM_PROMPT =
             "You are Cod3, an IDE-native coding assistant focused on practical, minimal changes."
-        private const val DEFAULT_KOOG_MODEL_ID = "gpt-4o-mini"
+        private val DEFAULT_KOOG_MODEL_ID = KoogModelCatalog.defaultModelId
 
         fun getInstance(): PluginSettingsState =
             ApplicationManager.getApplication().getService(PluginSettingsState::class.java)

@@ -1,5 +1,6 @@
 package com.github.egorbaranov.cod3.toolWindow
 
+import com.github.egorbaranov.cod3.toolWindow.chat.ChatMessage
 import com.github.egorbaranov.cod3.toolWindow.chat.ChatTabController
 import com.github.egorbaranov.cod3.ui.Icons
 import com.github.egorbaranov.cod3.ui.components.ChatBubble
@@ -22,7 +23,6 @@ import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
-import ee.carlrobert.llm.client.openai.completion.request.OpenAIChatCompletionMessage
 import scaledBy
 import java.awt.BorderLayout
 import java.awt.Color
@@ -45,7 +45,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     private val logger = Logger.getInstance(Cod3ToolWindowFactory::class.java)
 
     var chatQuantity = 1
-    val messages = mutableMapOf<Int, MutableList<OpenAIChatCompletionMessage>>()
+    val messages = mutableMapOf<Int, MutableList<ChatMessage>>()
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         toolWindow.title = "Cod3"

@@ -8,12 +8,15 @@ import ai.koog.agents.core.feature.handler.tool.ToolCallCompletedContext
 import ai.koog.agents.core.feature.handler.tool.ToolCallFailedContext
 import ai.koog.agents.core.feature.handler.tool.ToolCallStartingContext
 import ai.koog.agents.core.feature.handler.tool.ToolValidationFailedContext
+import ai.koog.agents.core.tools.DirectToolCallsEnabler
+import ai.koog.agents.core.tools.Tool
+import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolRegistry
+import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
 import ai.koog.agents.core.tools.reflect.tools
 import ai.koog.agents.features.eventHandler.feature.EventHandler
 import ai.koog.agents.mcp.McpToolRegistryProvider
 import ai.koog.agents.mcp.defaultStdioTransport
-import ai.koog.prompt.executor.llms.all.simpleOpenAIExecutor
 import ai.koog.prompt.streaming.StreamFrame
 import com.github.egorbaranov.cod3.settings.PluginSettingsState
 import com.intellij.openapi.Disposable
@@ -35,38 +38,43 @@ import java.util.concurrent.atomic.AtomicReference
 @Service(Service.Level.PROJECT)
 class KoogAgentService(
     private val project: Project
-): Disposable {
+) : Disposable {
 
     private val logger = Logger.getInstance(KoogAgentService::class.java)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessions = ConcurrentHashMap<Int, KoogAgentSession>()
     private val sessionMutex = Mutex()
 
-    fun run(chatId: Int, prompt: String, listener: (KoogStreamEvent) -> Unit): Job {
+    fun run(
+        chatId: Int,
+        prompt: String,
+        permissionHandler: ToolPermissionHandler,
+        listener: (KoogStreamEvent) -> Unit
+    ): Job {
         val trimmed = prompt.trim()
         require(trimmed.isNotEmpty()) { "Koog prompt must not be blank." }
 
         return scope.launch {
-            val session = prepareFreshSession(chatId)
+            val session = prepareFreshSession(chatId, permissionHandler)
             session.run(trimmed, listener)
         }
     }
 
-    private suspend fun prepareFreshSession(chatId: Int): KoogAgentSession = sessionMutex.withLock {
+    private suspend fun prepareFreshSession(
+        chatId: Int,
+        permissionHandler: ToolPermissionHandler
+    ): KoogAgentSession = sessionMutex.withLock {
         sessions.remove(chatId)?.close()
-        val session = createSession()
+        val session = createSession(permissionHandler)
         sessions[chatId] = session
         session
     }
 
-    private suspend fun createSession(): KoogAgentSession = withContext(Dispatchers.IO) {
+    private suspend fun createSession(permissionHandler: ToolPermissionHandler): KoogAgentSession =
+        withContext(Dispatchers.IO) {
         val settings = PluginSettingsState.getInstance()
-        val apiKey = settings.openAIApiKey.trim()
-        if (apiKey.isEmpty()) {
-            throw IllegalStateException("OpenAI API key is not configured in Cod3 settings.")
-        }
-
-        val executor = simpleOpenAIExecutor(apiKey)
+        val modelEntry = KoogModelCatalog.resolveEntry(settings.koogModelId)
+        val executor = KoogExecutorFactory.create(settings, modelEntry.provider)
         val eventBridge = KoogEventBridge()
         val toolRegistry = ToolRegistry {
             tools(KoogIdeToolset(project))
@@ -94,14 +102,16 @@ class KoogAgentService(
         }
         require(missing.isEmpty()) { "Missing Koog IDE tools: $missing; available=${registry.tools.map { it.name }}" }
 
+        val permissionedRegistry = wrapRegistryWithPermission(registry, permissionHandler)
+
         val systemPrompt = settings.koogSystemPrompt.ifBlank {
             DEFAULT_SYSTEM_PROMPT
         }
 
         val agent = AIAgent(
             promptExecutor = executor,
-            llmModel = KoogModelCatalog.resolve(settings.koogModelId),
-            toolRegistry = registry,
+            llmModel = modelEntry.model,
+            toolRegistry = permissionedRegistry,
             systemPrompt = systemPrompt
         ) {
             install(EventHandler) {
@@ -169,6 +179,64 @@ class KoogAgentService(
         sessions.values.forEach { it.close() }
         sessions.clear()
     }
+}
+
+fun interface ToolPermissionHandler {
+    fun shouldExecute(toolName: String?, args: Map<String, String>?): Boolean
+}
+
+private fun wrapRegistryWithPermission(
+    registry: ToolRegistry,
+    handler: ToolPermissionHandler
+): ToolRegistry {
+    if (registry.tools.isEmpty()) return registry
+    return ToolRegistry {
+        tools(
+            registry.tools.map { tool ->
+                @Suppress("UNCHECKED_CAST")
+                PermissionedTool(tool as Tool<Any?, Any?>, handler) as Tool<*, *>
+            }
+        )
+    }
+}
+
+@OptIn(InternalAgentToolsApi::class)
+private class PermissionedTool<TArgs, TResult>(
+    private val delegate: Tool<TArgs, TResult>,
+    private val handler: ToolPermissionHandler
+) : Tool<TArgs, TResult>() {
+
+    override val argsSerializer = delegate.argsSerializer
+    override val resultSerializer = delegate.resultSerializer
+    override val description: String
+        get() = delegate.description
+    override val name: String
+        get() = delegate.name
+    override val descriptor: ToolDescriptor
+        get() = delegate.descriptor
+
+    override suspend fun execute(args: TArgs): TResult {
+        val readableArgs = args.asReadableArgs()
+        if (!handler.shouldExecute(name, readableArgs)) {
+            throw ToolPermissionDeniedException(name)
+        }
+        return delegate.execute(args, DIRECT_CALLS_ENABLER)
+    }
+}
+
+@OptIn(InternalAgentToolsApi::class)
+private object DIRECT_CALLS_ENABLER : DirectToolCallsEnabler
+
+private class ToolPermissionDeniedException(toolName: String) :
+    IllegalStateException("Tool $toolName execution denied by user.")
+
+private fun Any?.asReadableArgs(): Map<String, String>? = when (this) {
+    null -> null
+    is Map<*, *> -> entries.mapNotNull { (key, value) ->
+        (key as? String)?.let { it to (value?.toString() ?: "") }
+    }.toMap()
+    is Iterable<*> -> this.mapIndexed { index, value -> index.toString() to (value?.toString() ?: "") }.toMap()
+    else -> mapOf("value" to this.toString())
 }
 
 private class KoogAgentSession(

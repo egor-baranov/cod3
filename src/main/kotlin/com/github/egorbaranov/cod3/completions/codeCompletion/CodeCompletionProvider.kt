@@ -11,12 +11,11 @@ import com.intellij.codeInsight.lookup.LookupManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
-import ee.carlrobert.llm.completion.CompletionEventListener
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
-import okhttp3.sse.EventSource
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
@@ -24,7 +23,7 @@ import kotlin.time.toDuration
 
 class CodeCompletionProvider : DebouncedInlineCompletionProvider() {
 
-    private val currentCallRef = AtomicReference<EventSource?>(null)
+    private val currentCallRef = AtomicReference<Job?>(null)
 
     override val id: InlineCompletionProviderID
         get() = InlineCompletionProviderID("Cod3")
@@ -50,7 +49,6 @@ class CodeCompletionProvider : DebouncedInlineCompletionProvider() {
         val rawCache = tryFindCache(project, prefix, suffix)
         val cacheValue = rawCache?.takeIf { it.isNotBlank() }
         if (cacheValue != null) {
-            println("using cached value: $cacheValue")
             return InlineCompletionSingleSuggestion.build(
                 elements = flowOf(InlineCompletionGrayTextElement(cacheValue))
             )
@@ -58,25 +56,16 @@ class CodeCompletionProvider : DebouncedInlineCompletionProvider() {
 
         // No cache hit: stream from remote service and populate cache
         return InlineCompletionSingleSuggestion.build(elements = channelFlow {
-            try {
-                val eventListener = object : CompletionEventListener<String> {
-                    override fun onMessage(message: String?, eventSource: EventSource?) {
-                        if (message == null) return
-                        println("got message fragment: $message")
-                        // Append to existing cache
-                        val current = tryFindCache(project, prefix, suffix).orEmpty()
-                        val updated = current + message
-                        println("update cache from $current to $updated")
-                        project.service<CodeCompletionCacheService>().setCache(prefix, suffix, updated)
-                        trySend(InlineCompletionGrayTextElement(message))
-                    }
-                }
-                val call = project.service<CodeCompletionService>()
-                    .getCodeCompletionAsync(prefix, suffix, eventListener)
-                currentCallRef.set(call)
-            } finally {
-                awaitClose { currentCallRef.getAndSet(null)?.cancel() }
+            val buffer = StringBuilder()
+            val service = project.service<CodeCompletionService>()
+            val job = service.streamCompletion(prefix, suffix) { chunk ->
+                if (chunk.isEmpty()) return@streamCompletion
+                buffer.append(chunk)
+                project.service<CodeCompletionCacheService>().setCache(prefix, suffix, buffer.toString())
+                trySend(InlineCompletionGrayTextElement(chunk))
             }
+            currentCallRef.set(job)
+            awaitClose { currentCallRef.getAndSet(null)?.cancel() }
         })
     }
 

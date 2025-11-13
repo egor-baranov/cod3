@@ -2,27 +2,37 @@ package com.github.egorbaranov.cod3.toolWindow.chat
 
 import com.github.egorbaranov.cod3.acp.AcpClientService
 import com.github.egorbaranov.cod3.acp.AcpStreamEvent
-import com.github.egorbaranov.cod3.completions.CompletionsRequestService
-import com.github.egorbaranov.cod3.completions.factory.UserMessage
+import com.github.egorbaranov.cod3.koog.KoogChatStreamEvent
 import com.github.egorbaranov.cod3.koog.KoogStreamEvent
 import com.github.egorbaranov.cod3.koog.koogAgentService
+import com.github.egorbaranov.cod3.koog.koogChatService
+import com.github.egorbaranov.cod3.koog.ToolPermissionHandler
 import com.github.egorbaranov.cod3.settings.PluginSettingsState
-import com.github.egorbaranov.cod3.toolWindow.Content
-import com.github.egorbaranov.cod3.toolWindow.SSEParser
 import com.github.egorbaranov.cod3.toolWindow.ToolCall
+import com.github.egorbaranov.cod3.toolWindow.chat.ChatMessage
+import com.github.egorbaranov.cod3.toolWindow.chat.ChatRole
 import com.github.egorbaranov.cod3.ui.Icons
 import com.github.egorbaranov.cod3.ui.components.ReferencePopupProvider
 import com.github.egorbaranov.cod3.ui.components.ScrollableSpacedPanel
-import com.github.egorbaranov.cod3.ui.components.createComboBox
 import com.github.egorbaranov.cod3.ui.components.createModelComboBox
 import com.github.egorbaranov.cod3.ui.createResizableEditor
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.ex.ComboBoxAction
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.util.text.StringUtil
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.IconLabelButton
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.panels.VerticalLayout
@@ -32,27 +42,23 @@ import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
-import ee.carlrobert.llm.client.openai.completion.ErrorDetails
-import ee.carlrobert.llm.client.openai.completion.OpenAIChatCompletionModel
-import ee.carlrobert.llm.client.openai.completion.request.OpenAIChatCompletionMessage
-import ee.carlrobert.llm.client.openai.completion.request.OpenAIChatCompletionRequest
-import ee.carlrobert.llm.completion.CompletionEventListener
-import okhttp3.sse.EventSource
 import java.awt.*
 import java.awt.geom.Area
 import java.awt.geom.Rectangle2D
 import java.awt.geom.RoundRectangle2D
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.*
 
 internal class ChatTabController(
     private val project: Project,
     private val chatIndex: Int,
-    private val messages: MutableMap<Int, MutableList<OpenAIChatCompletionMessage>>,
+    private val messages: MutableMap<Int, MutableList<ChatMessage>>,
     private val logger: Logger
 ) {
 
     private val toolProcessor = ToolCallProcessor()
+    private var agentMode: AgentMode = AgentMode.AGENT_CONFIRM
     private lateinit var messageContainer: JPanel
     private lateinit var scroll: JScrollPane
     private lateinit var planRenderer: PlanRenderer
@@ -112,18 +118,19 @@ internal class ChatTabController(
             }
 
             val settings = PluginSettingsState.getInstance()
+            val userMessage = text ?: ""
             when {
-                settings.useKoogAgents && text != null -> {
-                    sendMessageViaKoog(text)
+                settings.useKoogAgents -> {
+                    sendMessageViaKoogAgent(userMessage)
                     return
                 }
 
                 settings.useAgentClientProtocol -> {
-                    text?.let { sendMessageViaAcp(it) }
+                    sendMessageViaAcp(userMessage)
                     return
                 }
 
-                else -> sendMessageViaOpenAi(text ?: "")
+                else -> sendMessageViaKoogChat(userMessage)
             }
         }
     }
@@ -192,6 +199,9 @@ internal class ChatTabController(
         if (!event.final) return
 
         val toolName = event.toolCall.name ?: return
+        if (!shouldExecuteTool(toolName, event.toolCall.arguments)) {
+            return
+        }
         val toolCall = ToolCall(toolName, event.toolCall.arguments.takeIf { it.isNotEmpty() })
         val result = try {
             toolProcessor.process(project, toolCall, messageContainer)
@@ -204,124 +214,28 @@ internal class ChatTabController(
         scrollToBottom(scroll)
     }
 
-    private fun sendMessageViaOpenAi(text: String) {
+    private fun sendMessageViaKoogChat(text: String) {
         val conversation = messages.getOrPut(chatIndex) { mutableListOf() }
-        conversation.add(UserMessage(text))
+        conversation.add(ChatMessage(ChatRole.USER, text))
 
-        val completionRequest = OpenAIChatCompletionRequest
-            .Builder(ArrayList(conversation))
-            .setModel(OpenAIChatCompletionModel.GPT_4_1.code)
-            .setStream(true)
-            .build()
-
-        var cachedBubble: com.github.egorbaranov.cod3.ui.components.ChatBubble? = null
         val accumulatedText = StringBuilder()
-        val pendingTools: MutableList<ToolCall> = mutableListOf()
+        val bubbleRef = AtomicReference<com.github.egorbaranov.cod3.ui.components.ChatBubble?>()
 
-        CompletionsRequestService().getChatCompletionAsync(
-            completionRequest,
-            object : CompletionEventListener<String> {
-                override fun onCancelled(messageBuilder: StringBuilder?) {}
-                override fun onOpen() {}
-
-                override fun onMessage(message: String?, rawMessage: String?, eventSource: EventSource?) {
-                    if (message.isNullOrEmpty()) return
-                    accumulatedText.append(message)
-                    val combined = accumulatedText.toString()
-                    if (cachedBubble != null) {
-                        cachedBubble!!.updateText(combined)
-                    } else {
-                        cachedBubble = messageContainer.appendAssistantBubble(message)
-                    }
-                    scrollToBottom(scroll)
-                }
-
-                override fun onError(error: ErrorDetails?, ex: Throwable?) {
-                    logger.warn("Completion error: $error", ex)
-                }
-
-                override fun onComplete(messageBuilder: StringBuilder?) {
-                    conversation.add(com.github.egorbaranov.cod3.completions.factory.AssistantMessage(accumulatedText.toString()))
-                    pendingTools.forEach { tool ->
-                        val toolResult = try {
-                            toolProcessor.process(project, tool, messageContainer) ?: return@forEach
-                        } catch (e: Exception) {
-                            "Error executing tool: ${e.message}"
-                        }
-                        conversation.add(com.github.egorbaranov.cod3.completions.factory.ToolMessage(toolResult))
-                        messageContainer.appendUserBubble(toolResult)
+        project.koogChatService().stream(conversation.toList()) { event ->
+            when (event) {
+                is KoogChatStreamEvent.ContentDelta -> appendStreamingAssistant(accumulatedText, bubbleRef, event.text)
+                is KoogChatStreamEvent.Completed -> {
+                    if (event.response.isNotBlank()) {
+                        conversation.add(ChatMessage(ChatRole.ASSISTANT, event.response))
                     }
                 }
 
-                override fun onEvent(data: String) {
-                    try {
-                        val (content, toolCalls) = SSEParser.parse(data)
-                        when (content) {
-                            is Content.PlanContent -> {
-                                val textForPlan = buildString {
-                                    append(content.plan.taskTitle)
-                                    append("\n")
-                                    append(content.plan.steps.joinToString())
-                                    append("\n")
-                                }
-                                accumulatedText.append(textForPlan)
-                                val combined = accumulatedText.toString()
-                                if (cachedBubble != null) {
-                                    cachedBubble!!.updateText(combined)
-                                } else {
-                                    cachedBubble = messageContainer.appendAssistantBubble(combined)
-                                }
-                            }
-
-                            is Content.TextContent -> {
-                                accumulatedText.append(content.text)
-                                val combined = accumulatedText.toString()
-                                if (cachedBubble != null) {
-                                    cachedBubble!!.updateText(combined)
-                                } else {
-                                    cachedBubble = messageContainer.appendAssistantBubble(combined)
-                                }
-                            }
-
-                            else -> Unit
-                        }
-
-                        toolCalls?.let {
-                            val toolCall = it.firstOrNull() ?: return@let
-                            if (pendingTools.isEmpty()) {
-                                pendingTools.add(
-                                    ToolCall(
-                                        name = toolCall.name.takeIf { name -> name != "null" },
-                                        arguments = toolCall.arguments
-                                    )
-                                )
-                            } else {
-                                val existing = pendingTools.last()
-                                pendingTools[pendingTools.lastIndex] = ToolCall(
-                                    name = existing.name,
-                                    arguments = existing.arguments.orEmpty() + toolCall.arguments.orEmpty()
-                                )
-                            }
-                        } ?: run {
-                            pendingTools.forEach { tool ->
-                                messageContainer.appendUserBubble(
-                                    tool.name.orEmpty() + "(" + tool.arguments.orEmpty() + ")"
-                                )
-                                val result = try {
-                                    toolProcessor.process(project, tool, messageContainer) ?: return@run
-                                } catch (e: Exception) {
-                                    "Error executing tool: ${e.message}"
-                                }
-                                sendMessage(result)
-                            }
-                            pendingTools.clear()
-                        }
-                    } catch (e: Exception) {
-                        logger.warn("Failed to parse SSE JSON", e)
-                    }
+                is KoogChatStreamEvent.Error -> {
+                    val errorMessage = event.throwable.message ?: event.throwable.javaClass.simpleName
+                    appendStreamingAssistant(accumulatedText, bubbleRef, "\n\nError: $errorMessage")
                 }
             }
-        )
+        }
     }
 
     private fun createInputBar(
@@ -387,8 +301,7 @@ internal class ChatTabController(
         val footer = panel {
             row {
                 cell(createModelComboBox())
-                cell(createComboBox(listOf("Agent", "Manual")))
-                cell(checkBox("Auto-apply").component)
+                cell(createAgentModeDropdown())
                 cell(sendButton).align(AlignX.RIGHT)
             }
         }.andTransparent().withBorder(JBUI.Borders.empty(0, 4))
@@ -396,11 +309,215 @@ internal class ChatTabController(
         add(footer, BorderLayout.SOUTH)
     }
 
-    private fun sendMessageViaKoog(userMessage: String) {
+    private fun createAgentModeDropdown(): JComponent {
+        val action = object : ComboBoxAction() {
+            override fun update(e: AnActionEvent) {
+                e.presentation.text = agentMode.displayName
+            }
+
+            override fun createPopupActionGroup(button: JComponent?): DefaultActionGroup {
+                val comboPresentation = (button as? ComboBoxButton)?.presentation ?: templatePresentation
+                return DefaultActionGroup().apply {
+                    AgentMode.entries.forEach { mode ->
+                        add(object : AnAction(mode.displayName) {
+                            override fun actionPerformed(e: AnActionEvent) {
+                                agentMode = mode
+                                comboPresentation.text = mode.displayName
+                            }
+
+                            override fun update(e: AnActionEvent) {
+                                e.presentation.isEnabled = agentMode != mode
+                            }
+                        })
+                    }
+                }
+            }
+
+            override fun createCustomComponent(presentation: com.intellij.openapi.actionSystem.Presentation, place: String): JComponent {
+                val button = createComboBoxButton(presentation)
+                button.foreground = EditorColorsManager.getInstance().globalScheme.defaultForeground
+                button.border = null
+                button.putClientProperty("JButton.backgroundColor", Color(0, 0, 0, 0))
+                return button
+            }
+        }
+
+        val presentation = action.templatePresentation
+        presentation.text = agentMode.displayName
+
+        return action.createCustomComponent(presentation, ActionPlaces.UNKNOWN)
+    }
+
+    private fun shouldExecuteTool(toolName: String?, args: Map<String, String>?): Boolean {
+        val readableName = toolName ?: "tool"
+        return when (agentMode) {
+            AgentMode.CHAT -> {
+                appendToolInfo("Skipped $readableName because Chat mode disables tool calls.")
+                false
+            }
+
+            AgentMode.AGENT_CONFIRM -> {
+                val prompt = buildApprovalPrompt(readableName, args)
+                val app = ApplicationManager.getApplication()
+                val inlineFlow = !app.isDispatchThread
+                val approved = if (inlineFlow) {
+                    requestInlineToolApproval(readableName, args)
+                } else {
+                    showApprovalDialog(prompt)
+                }
+                if (!approved && !inlineFlow) {
+                    appendToolInfo("Declined $readableName.")
+                }
+                approved
+            }
+
+            AgentMode.AGENT_AUTO -> true
+        }
+    }
+
+    private fun appendToolInfo(text: String) {
+        SwingUtilities.invokeLater {
+            messageContainer.appendAssistantBubble(text)
+            scrollToBottom(scroll)
+        }
+    }
+
+    private fun showApprovalDialog(prompt: String): Boolean {
+        val app = ApplicationManager.getApplication()
+        val dialogAction = {
+            Messages.showYesNoDialog(
+                project,
+                prompt,
+                "Approve Tool Execution",
+                Messages.getYesButton(),
+                Messages.getNoButton(),
+                null
+            )
+        }
+
+        val result = if (app.isDispatchThread) {
+            dialogAction()
+        } else {
+            var decision = Messages.NO
+            app.invokeAndWait({
+                decision = dialogAction()
+            }, ModalityState.any())
+            decision
+        }
+        return result == Messages.YES
+    }
+
+    private fun buildApprovalPrompt(toolName: String, args: Map<String, String>?): String {
+        val argDetails = args?.entries
+            ?.joinToString(separator = "\n") { "${it.key}: ${it.value}" }
+            ?.takeIf { it.isNotBlank() }
+        return buildString {
+            appendLine("Agent requests permission to run $toolName.")
+            argDetails?.let {
+                appendLine()
+                appendLine("Arguments:")
+                appendLine(it)
+            }
+            appendLine()
+            append("Allow execution?")
+        }
+    }
+
+    private fun requestInlineToolApproval(toolName: String, args: Map<String, String>?): Boolean {
+        val future = CompletableFuture<Boolean>()
+
+        ApplicationManager.getApplication().invokeLater {
+            val panel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+                border = JBUI.Borders.empty(10, 0)
+            }
+
+            val escapedName = StringUtil.escapeXmlEntities(toolName)
+            val statusLabel = JBLabel("<html>Agent requests permission to run <b>$escapedName</b>.</html>").apply {
+                foreground = UIUtil.getLabelForeground()
+            }
+            panel.add(statusLabel)
+
+            args?.takeIf { it.isNotEmpty() }?.let { arguments ->
+                val argHtml = formatArgumentsHtml(arguments)
+                val argLabel = JBLabel("<html>$argHtml</html>").apply {
+                    border = JBUI.Borders.emptyTop(6)
+                    foreground = UIUtil.getLabelInfoForeground()
+                }
+                panel.add(argLabel)
+            }
+
+            val buttonPanel = JPanel(BorderLayout()).apply {
+                isOpaque = false
+            }
+            val approveButton = JButton("Allow").apply {
+                isOpaque = false
+                putClientProperty("JButton.buttonType", "accent")
+            }
+            val declineButton = JButton("Decline").apply {
+                isOpaque = false
+                putClientProperty("JButton.backgroundColor", background)
+            }
+            val buttonsRow = JPanel(FlowLayout(FlowLayout.RIGHT, JBUI.scale(8), 0)).apply {
+                isOpaque = false
+                add(approveButton)
+                add(declineButton)
+            }
+            buttonPanel.add(buttonsRow, BorderLayout.SOUTH)
+            panel.add(buttonPanel)
+
+            messageContainer.addChatBubble(panel)
+            scrollToBottom(scroll)
+
+            fun complete(approved: Boolean) {
+                if (future.isDone) return
+                approveButton.isEnabled = false
+                declineButton.isEnabled = false
+                buttonPanel.isVisible = false
+                val statusText = if (approved) {
+                    "Approved $toolName."
+                } else {
+                    "Declined $toolName."
+                }
+                statusLabel.text = statusText
+                statusLabel.foreground = if (approved) JBColor(0x4CAF50, 0x6FBF73) else JBColor(0xF44336, 0xF6685E)
+                future.complete(approved)
+            }
+
+            approveButton.addActionListener { complete(true) }
+            declineButton.addActionListener { complete(false) }
+        }
+
+        return try {
+            future.get()
+        } catch (ie: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        } catch (ex: Exception) {
+            logger.warn("Tool approval bubble failed for $toolName", ex)
+            false
+        }
+    }
+
+    private fun formatArgumentsHtml(args: Map<String, String>): String {
+        val rows = args.entries.joinToString(separator = "<br/>") { entry ->
+            val key = StringUtil.escapeXmlEntities(entry.key)
+            val value = StringUtil.escapeXmlEntities(entry.value)
+            "<code>$key</code>: $value"
+        }
+        return "<b>Arguments</b><br/>$rows"
+    }
+
+    private fun sendMessageViaKoogAgent(userMessage: String) {
         val accumulatedText = StringBuilder()
         val bubbleRef = AtomicReference<com.github.egorbaranov.cod3.ui.components.ChatBubble?>()
 
-        project.koogAgentService().run(chatIndex, userMessage) { event ->
+        val permissionHandler = ToolPermissionHandler { name, arguments ->
+            shouldExecuteTool(name, arguments)
+        }
+
+        project.koogAgentService().run(chatIndex, userMessage, permissionHandler) { event ->
             when (event) {
                 is KoogStreamEvent.ContentDelta -> appendStreamingAssistant(accumulatedText, bubbleRef, event.text)
                 is KoogStreamEvent.ToolCallUpdate -> {
@@ -420,4 +537,10 @@ internal class ChatTabController(
             }
         }
     }
+}
+
+private enum class AgentMode(val displayName: String) {
+    CHAT("Chat"),
+    AGENT_CONFIRM("Agent"),
+    AGENT_AUTO("Agent (full access)")
 }

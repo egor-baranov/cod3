@@ -2,7 +2,6 @@ package com.github.egorbaranov.cod3.ui
 
 import com.github.egorbaranov.cod3.ui.components.ReferencePopupProvider
 import com.github.egorbaranov.cod3.ui.components.ScrollableSpacedPanel
-import com.github.egorbaranov.cod3.ui.components.createComboBox
 import com.github.egorbaranov.cod3.ui.components.createModelComboBox
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -27,6 +26,7 @@ import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.Box
+import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
@@ -193,7 +193,7 @@ fun insertBlockInlayAboveSelection(editor: Editor, project: Project) {
         border = JBUI.Borders.emptyTop(4)
         add(createModelComboBox(), BorderLayout.WEST)
         add(JPanel(BorderLayout()).apply {
-            add(createComboBox(listOf("Edit selection", "Edit full file", "Quick question", "Send to chat")))
+            add(createPresetComboBox(listOf("Edit selection", "Edit full file", "Quick question", "Send to chat")))
             add(IconLabelButton(IconUtil.scale(Icons.Send, null, 0.9f), {}).apply {
                 minimumSize = Dimension(24, 24)
                 preferredSize = Dimension(24, 24)
@@ -224,6 +224,53 @@ fun insertBlockInlayAboveSelection(editor: Editor, project: Project) {
         editor.putUserData(LAST_INLAY_KEY, it)
         Disposer.register(it as Disposable) { editor.scrollingModel.removeVisibleAreaListener(listener) }
     }
+}
+
+private fun createPresetComboBox(options: List<String>): JComponent {
+    val entries = options.ifEmpty { listOf("...") }
+    val action = object : com.intellij.openapi.actionSystem.ex.ComboBoxAction() {
+        private var selected = entries.first()
+
+        override fun update(e: com.intellij.openapi.actionSystem.AnActionEvent) {
+            e.presentation.text = selected
+        }
+
+        override fun createPopupActionGroup(button: JComponent?): com.intellij.openapi.actionSystem.DefaultActionGroup {
+            val presentation = (button as? ComboBoxButton)?.presentation ?: templatePresentation
+            return com.intellij.openapi.actionSystem.DefaultActionGroup().apply {
+                entries.forEach { option ->
+                    add(object : com.intellij.openapi.actionSystem.AnAction(option) {
+                        override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) {
+                            selected = option
+                            presentation.text = option
+                        }
+
+                        override fun update(e: com.intellij.openapi.actionSystem.AnActionEvent) {
+                            e.presentation.isEnabled = option != selected
+                        }
+
+                        override fun getActionUpdateThread(): com.intellij.openapi.actionSystem.ActionUpdateThread =
+                            com.intellij.openapi.actionSystem.ActionUpdateThread.BGT
+                    })
+                }
+            }
+        }
+
+        override fun createCustomComponent(
+            presentation: com.intellij.openapi.actionSystem.Presentation,
+            place: String
+        ): JComponent {
+            val button = createComboBoxButton(presentation)
+            button.foreground = com.intellij.openapi.editor.colors.EditorColorsManager.getInstance()
+                .globalScheme.defaultForeground
+            button.border = null
+            button.putClientProperty("JButton.backgroundColor", Color(0, 0, 0, 0))
+            return button
+        }
+    }
+
+    action.templatePresentation.text = entries.first()
+    return action.createCustomComponent(action.templatePresentation, com.intellij.openapi.actionSystem.ActionPlaces.UNKNOWN)
 }
 
 // keys for cleanup
