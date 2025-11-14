@@ -2,10 +2,14 @@ package com.github.egorbaranov.cod3.ui.components
 
 import com.github.egorbaranov.cod3.ui.Icons
 import com.intellij.icons.AllIcons
-import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.roots.ProjectFileIndex
+import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.ui.popup.PopupChooserBuilder
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.EditorTextField
 import com.intellij.ui.components.JBList
 import java.awt.BorderLayout
@@ -13,6 +17,8 @@ import java.awt.Component
 import java.awt.Point
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.util.LinkedHashMap
+import java.util.ArrayDeque
 import javax.swing.BorderFactory
 import javax.swing.DefaultListCellRenderer
 import javax.swing.Icon
@@ -63,31 +69,35 @@ object TemplatePopupComponent {
      */
     data class TemplateItem(
         val text: String,
-        val icon: Icon? = null
-    )
+        val icon: Icon? = null,
+        val navigationPath: String? = null,
+        val contentProvider: (() -> String)? = null
+    ) {
+        fun resolveContent(): String = contentProvider?.invoke()?.takeIf { it.isNotBlank() } ?: text
+    }
 
     // Example template items per group; replace or extend as needed. "Files & Folders" will be overridden dynamically.
     private val defaultTemplates: Map<String, List<TemplateItem>> = mapOf(
         "Code" to listOf(
-            TemplateItem("for loop", Icons.Code),
-            TemplateItem("if statement", Icons.Code),
-            TemplateItem("class declaration", Icons.Code),
-            TemplateItem("function stub", Icons.Code)
+            TemplateItem("for loop", Icons.Code) { "for (index in 0 until n) {\n    // ...\n}" },
+            TemplateItem("if statement", Icons.Code) { "if (condition) {\n    // ...\n}" },
+            TemplateItem("class declaration", Icons.Code) { "class MyClass {\n    // ...\n}" },
+            TemplateItem("function stub", Icons.Code) { "fun myFunction(args: List<Any>) {\n    // ...\n}" }
         ),
         "Docs" to listOf(
-            TemplateItem("TODO comment", AllIcons.General.Show),
-            TemplateItem("KDoc snippet", AllIcons.Toolwindows.Documentation),
-            TemplateItem("License header", AllIcons.FileTypes.Text)
+            TemplateItem("TODO comment", AllIcons.General.Show) { "// TODO: describe task" },
+            TemplateItem("KDoc snippet", AllIcons.Toolwindows.Documentation) { "/**\n * Summary.\n */" },
+            TemplateItem("License header", AllIcons.FileTypes.Text) { "/* Licensed under ... */" }
         ),
         "Git" to listOf(
-            TemplateItem("commit message", AllIcons.Vcs.CommitNode),
-            TemplateItem("checkout branch", AllIcons.Vcs.Branch),
-            TemplateItem("merge branch", AllIcons.Vcs.Merge)
+            TemplateItem("commit message", AllIcons.Vcs.CommitNode) { "feat: describe your change" },
+            TemplateItem("checkout branch", AllIcons.Vcs.Branch) { "git checkout feature/my-branch" },
+            TemplateItem("merge branch", AllIcons.Vcs.Merge) { "git merge feature/my-branch" }
         ),
         "Web" to listOf(
-            TemplateItem("<div>...</div>", Icons.Web),
-            TemplateItem("<a href=...>", Icons.Web),
-            TemplateItem("<img src=...>", Icons.Web)
+            TemplateItem("<div>...</div>", Icons.Web) { "<div class=\"container\">\n    ...\n</div>" },
+            TemplateItem("<a href=...>", Icons.Web) { "<a href=\"https://example.com\">link</a>" },
+            TemplateItem("<img src=...>", Icons.Web) { "<img src=\"/path/to/image.png\" alt=\"\" />" }
         ),
         "Recent Changes" to listOf(
             TemplateItem("Change1", Icons.History),
@@ -167,7 +177,7 @@ object TemplatePopupComponent {
             .setItemChosenCallback(Runnable {
                 val sel = groupList.selectedValue ?: return@Runnable
                 // Open template popup
-                val items = if (sel == "Files & Folders") getOpenFileItems(project) else templates[sel] ?: emptyList()
+                val items = if (sel == "Files & Folders") getProjectFileItems(project) else templates[sel] ?: emptyList()
                 showTemplatePopup(
                     group = sel,
                     editorTextField = editorTextField,
@@ -199,10 +209,10 @@ object TemplatePopupComponent {
                         e.consume()
                     }
                     KeyEvent.VK_ENTER -> {
-                        val sel = groupList.selectedValue as? String ?: return
+                        val sel = groupList.selectedValue ?: return
                         // Open template popup for this group
                         groupPopup.cancel()
-                        val items = if (sel == "Files & Folders") getOpenFileItems(project) else templates[sel] ?: emptyList()
+                        val items = if (sel == "Files & Folders") getProjectFileItems(project) else templates[sel] ?: emptyList()
                         showTemplatePopup(
                             group = sel,
                             editorTextField = editorTextField,
@@ -230,13 +240,65 @@ object TemplatePopupComponent {
     /**
      * Fetch open files in the project and return as TemplateItem list with file icons.
      */
-    private fun getOpenFileItems(project: Project): List<TemplateItem> {
-        val manager = FileEditorManager.getInstance(project)
-        val openFiles = manager.openFiles
-        return openFiles.map { file ->
-            val name = file.name
-            val icon = file.fileType.icon
-            TemplateItem(name, icon)
+    private fun getProjectFileItems(project: Project): List<TemplateItem> {
+        val rootManager = ProjectRootManager.getInstance(project)
+        val fileIndex = rootManager.fileIndex
+        val contentRoots = rootManager.contentRoots.filter { it.fileSystem is LocalFileSystem }
+        val roots = if (contentRoots.isEmpty()) {
+            project.basePath?.let { path ->
+                LocalFileSystem.getInstance().findFileByPath(path)?.let { arrayOf(it) }
+            } ?: emptyArray()
+        } else {
+            contentRoots.toTypedArray()
+        }
+        if (roots.isEmpty()) return emptyList()
+        val files = LinkedHashMap<String, VirtualFile>()
+        val queue = ArrayDeque<VirtualFile>()
+        roots.forEach { queue.add(it) }
+        val limit = 400
+        val excludeDirs = setOf("build", "out", ".idea", ".git", ".gradle")
+        while (queue.isNotEmpty() && files.size < limit) {
+            val vf = queue.removeFirst()
+            if (!vf.isValid) continue
+            if (!shouldTraverse(vf, fileIndex, contentRoots.isNotEmpty(), excludeDirs)) continue
+            if (vf.isDirectory) {
+                vf.children?.forEach { queue.add(it) }
+            } else {
+                files.putIfAbsent(vf.path, vf)
+            }
+        }
+        return files.values.map { file ->
+            val root = roots.firstOrNull { VfsUtil.isAncestor(it, file, true) }
+            val relative = root?.let { VfsUtil.getRelativePath(file, it) } ?: file.name
+            TemplateItem(relative ?: file.name, file.fileType.icon, navigationPath = file.path) {
+                loadFilePreview(file)
+            }
+        }.sortedBy { it.text.lowercase() }
+    }
+
+    private fun shouldTraverse(
+        file: VirtualFile,
+        fileIndex: ProjectFileIndex,
+        enforceContent: Boolean,
+        excludeDirs: Set<String>
+    ): Boolean {
+        if (file.isDirectory && excludeDirs.contains(file.name)) return false
+        if (enforceContent) {
+            return fileIndex.isInContent(file)
+        }
+        return true
+    }
+
+    private fun loadFilePreview(file: com.intellij.openapi.vfs.VirtualFile): String {
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        return try {
+            app.runReadAction<String> {
+                val content = String(file.contentsToByteArray(), file.charset)
+                val limit = 8000
+                if (content.length <= limit) content else content.take(limit) + "\n…"
+            }
+        } catch (ex: Exception) {
+            "Unable to read ${file.name}: ${ex.message}"
         }
     }
 

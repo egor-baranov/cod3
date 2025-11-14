@@ -2,34 +2,28 @@ package com.github.egorbaranov.cod3.toolWindow.chat
 
 import com.github.egorbaranov.cod3.acp.AcpClientService
 import com.github.egorbaranov.cod3.acp.AcpStreamEvent
-import com.github.egorbaranov.cod3.koog.KoogChatStreamEvent
-import com.github.egorbaranov.cod3.koog.KoogStreamEvent
-import com.github.egorbaranov.cod3.koog.koogAgentService
-import com.github.egorbaranov.cod3.koog.koogChatService
-import com.github.egorbaranov.cod3.koog.ToolPermissionHandler
+import com.github.egorbaranov.cod3.koog.*
 import com.github.egorbaranov.cod3.settings.PluginSettingsState
 import com.github.egorbaranov.cod3.toolWindow.ToolCall
-import com.github.egorbaranov.cod3.toolWindow.chat.ChatMessage
-import com.github.egorbaranov.cod3.toolWindow.chat.ChatRole
 import com.github.egorbaranov.cod3.ui.Icons
 import com.github.egorbaranov.cod3.ui.components.ReferencePopupProvider
 import com.github.egorbaranov.cod3.ui.components.ScrollableSpacedPanel
 import com.github.egorbaranov.cod3.ui.components.createModelComboBox
 import com.github.egorbaranov.cod3.ui.createResizableEditor
-import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.ex.ComboBoxAction
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.text.StringUtil
-import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.IconLabelButton
 import com.intellij.ui.components.JBLabel
@@ -105,37 +99,41 @@ internal class ChatTabController(
     }
 
     private fun sendMessage(text: String?) {
-        if (text == null || text.isNotEmpty()) {
-            ApplicationManager.getApplication().invokeLater {
-                WriteCommandAction.runWriteCommandAction(project) {
-                    referencePopupProvider.editorTextField.text = ""
-                }
+        val trimmed = text?.trim().orEmpty()
+        val hasAttachments = referencePopupProvider.hasAttachments()
+        if (trimmed.isEmpty() && !hasAttachments) return
+
+        val attachments = referencePopupProvider.detachAttachments()
+            .map { ChatAttachment(it.title, it.content, it.icon, it.navigationPath) }
+
+        ApplicationManager.getApplication().invokeLater {
+            WriteCommandAction.runWriteCommandAction(project) {
+                referencePopupProvider.editorTextField.text = ""
+            }
+        }
+
+        if (trimmed.isNotEmpty() || attachments.isNotEmpty()) {
+            messageContainer.appendUserBubble(trimmed, attachments, project)
+            scrollToBottom(scroll)
+        }
+
+        val settings = PluginSettingsState.getInstance()
+        when {
+            settings.useKoogAgents -> {
+                sendMessageViaKoogAgent(trimmed, attachments)
+                return
             }
 
-            text?.let {
-                messageContainer.appendUserBubble(it)
-                scrollToBottom(scroll)
+            settings.useAgentClientProtocol -> {
+                sendMessageViaAcp(trimmed, attachments)
+                return
             }
 
-            val settings = PluginSettingsState.getInstance()
-            val userMessage = text ?: ""
-            when {
-                settings.useKoogAgents -> {
-                    sendMessageViaKoogAgent(userMessage)
-                    return
-                }
-
-                settings.useAgentClientProtocol -> {
-                    sendMessageViaAcp(userMessage)
-                    return
-                }
-
-                else -> sendMessageViaKoogChat(userMessage)
-            }
+            else -> sendMessageViaKoogChat(trimmed, attachments)
         }
     }
 
-    private fun sendMessageViaAcp(userMessage: String) {
+    private fun sendMessageViaAcp(userMessage: String, attachments: List<ChatAttachment>) {
         val accumulatedText = StringBuilder()
         val textBubbleRef = AtomicReference<com.github.egorbaranov.cod3.ui.components.ChatBubble?>()
 
@@ -148,7 +146,7 @@ internal class ChatTabController(
 
         val service = project.service<AcpClientService>()
 
-        service.sendPrompt(userMessage) { event ->
+        service.sendPrompt(formatMessageWithAttachments(userMessage, attachments)) { event ->
             when (event) {
                 is AcpStreamEvent.AgentContentText -> appendStreamingAssistant(
                     accumulatedText,
@@ -210,13 +208,13 @@ internal class ChatTabController(
             "Error executing tool $toolName: ${e.message}"
         }
         val message = result ?: "Tool $toolName executed."
-        messageContainer.appendUserBubble(message)
+        messageContainer.appendUserBubble(message, project = project)
         scrollToBottom(scroll)
     }
 
-    private fun sendMessageViaKoogChat(text: String) {
+    private fun sendMessageViaKoogChat(text: String, attachments: List<ChatAttachment>) {
         val conversation = messages.getOrPut(chatIndex) { mutableListOf() }
-        conversation.add(ChatMessage(ChatRole.USER, text))
+        conversation.add(ChatMessage(ChatRole.USER, text, attachments))
 
         val accumulatedText = StringBuilder()
         val bubbleRef = AtomicReference<com.github.egorbaranov.cod3.ui.components.ChatBubble?>()
@@ -509,7 +507,7 @@ internal class ChatTabController(
         return "<b>Arguments</b><br/>$rows"
     }
 
-    private fun sendMessageViaKoogAgent(userMessage: String) {
+    private fun sendMessageViaKoogAgent(userMessage: String, attachments: List<ChatAttachment>) {
         val accumulatedText = StringBuilder()
         val bubbleRef = AtomicReference<com.github.egorbaranov.cod3.ui.components.ChatBubble?>()
 
@@ -517,7 +515,8 @@ internal class ChatTabController(
             shouldExecuteTool(name, arguments)
         }
 
-        project.koogAgentService().run(chatIndex, userMessage, permissionHandler) { event ->
+        val payload = formatMessageWithAttachments(userMessage, attachments)
+        project.koogAgentService().run(chatIndex, payload, permissionHandler) { event ->
             when (event) {
                 is KoogStreamEvent.ContentDelta -> appendStreamingAssistant(accumulatedText, bubbleRef, event.text)
                 is KoogStreamEvent.ToolCallUpdate -> {

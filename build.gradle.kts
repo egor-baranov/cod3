@@ -45,6 +45,10 @@ dependencies {
     implementation("ai.koog:koog-agents:0.5.2")
     implementation(kotlin("reflect"))
     implementation("com.knuddels:jtokkit:1.1.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.8.1")
 
 
     testImplementation(libs.junit)
@@ -74,27 +78,6 @@ dependencies {
 
         testFramework(TestFrameworkType.Platform)
     }
-}
-
-dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.7.3")
-}
-
-configurations.runtimeClasspath {
-    exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core")
-    exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core-jvm")
-    exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-jdk8")
-    exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-swing")
-}
-
-configurations.testRuntimeClasspath {
-    exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core")
-    exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core-jvm")
-    exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-jdk8")
-    exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-swing")
 }
 
 // Configure IntelliJ Platform Gradle Plugin - read more:

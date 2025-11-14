@@ -10,10 +10,13 @@ import javax.swing.JPanel
 class RoundedTokenLabel(
     private val text: String,
     private val icon: Icon? = null,
-    var onClose: () -> Unit
+    private val closable: Boolean = true,
+    var onClose: () -> Unit = {},
+    private val onClick: (() -> Unit)? = null
 ) : JPanel(FlowLayout(FlowLayout.LEFT)) {
 
     private val padding = 8
+    private val trailingPadding = 8
     private val iconTextGap = 4
     private val closeLeftPadding = 6   // ↑ was 4
     private val closeRightPadding = 10  // ↑ was 6
@@ -27,22 +30,30 @@ class RoundedTokenLabel(
     init {
         isOpaque = false
 
-        addMouseListener(object : MouseAdapter() {
-            override fun mousePressed(e: MouseEvent) {
-                if (closeButtonBounds?.contains(e.point) == true) {
-                    onClose()
+        val clickable = onClick != null
+        if (closable || clickable) {
+            addMouseListener(object : MouseAdapter() {
+                override fun mousePressed(e: MouseEvent) {
+                    if (closable && closeButtonBounds?.contains(e.point) == true) {
+                        onClose()
+                    } else if (clickable) {
+                        onClick?.invoke()
+                    }
                 }
-            }
-        })
+            })
 
-        addMouseMotionListener(object : MouseAdapter() {
-            override fun mouseMoved(e: MouseEvent) {
-                cursor = if (closeButtonBounds?.contains(e.point) == true)
-                    Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                else
-                    Cursor.getDefaultCursor()
-            }
-        })
+            addMouseMotionListener(object : MouseAdapter() {
+                override fun mouseMoved(e: MouseEvent) {
+                    cursor = when {
+                        closable && closeButtonBounds?.contains(e.point) == true ->
+                            Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+
+                        clickable -> Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                        else -> Cursor.getDefaultCursor()
+                    }
+                }
+            })
+        }
     }
 
     override fun paintComponent(g: Graphics) {
@@ -74,22 +85,26 @@ class RoundedTokenLabel(
             g2t.drawString(text, x, textY)
 
             val textWidth = fm.stringWidth(text)
-            x += textWidth + closeLeftPadding
+            x += textWidth + if (closable) closeLeftPadding else trailingPadding
 
-            val closeX = x
-            val closeY = centerY - closeSize / 2
-            g2t.color = JBColor.DARK_GRAY
-            g2t.stroke = BasicStroke(1.2f)
-            g2t.drawLine(closeX, closeY, closeX + closeSize, closeY + closeSize)
-            g2t.drawLine(closeX + closeSize, closeY, closeX, closeY + closeSize)
+            if (closable) {
+                val closeX = x
+                val closeY = centerY - closeSize / 2
+                g2t.color = JBColor.DARK_GRAY
+                g2t.stroke = BasicStroke(1.2f)
+                g2t.drawLine(closeX, closeY, closeX + closeSize, closeY + closeSize)
+                g2t.drawLine(closeX + closeSize, closeY, closeX, closeY + closeSize)
 
-            // Hit box is a bit larger for easier clicking
-            closeButtonBounds = Rectangle(
-                closeX - closeHitPadding,
-                closeY - closeHitPadding,
-                closeSize + closeHitPadding * 2,
-                closeSize + closeHitPadding * 2
-            )
+                // Hit box is a bit larger for easier clicking
+                closeButtonBounds = Rectangle(
+                    closeX - closeHitPadding,
+                    closeY - closeHitPadding,
+                    closeSize + closeHitPadding * 2,
+                    closeSize + closeHitPadding * 2
+                )
+            } else {
+                closeButtonBounds = null
+            }
         } finally {
             g2t.dispose()
         }
@@ -103,11 +118,12 @@ class RoundedTokenLabel(
         val iconWidth = icon?.iconWidth ?: 0
         val iconHeight = icon?.iconHeight ?: 0
 
+        val closeWidth = if (closable) closeLeftPadding + closeSize + closeRightPadding else trailingPadding
         val totalWidth = padding +
                 (if (icon != null) iconWidth + iconTextGap else 0) +
-                textWidth + closeLeftPadding + closeSize + closeRightPadding
+                textWidth + closeWidth
 
-        val totalHeight = padding + maxOf(textHeight, iconHeight, closeSize)
+        val totalHeight = padding + maxOf(textHeight, iconHeight, if (closable) closeSize else textHeight)
 
         return Dimension(totalWidth, totalHeight)
     }

@@ -4,15 +4,21 @@ import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.ui.EditorTextField
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.vfs.LocalFileSystem
 import java.awt.Component
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.util.*
 import javax.swing.Icon
 import javax.swing.JPanel
 
 class ReferencePopupProvider(val editorTextField: EditorTextField, val contextReferencePanel: JPanel) {
 
     private var lookupPopup: JBPopup? = null
+    private val attachments = LinkedHashMap<UUID, ContextAttachment>()
 
     init {
         editorTextField.document.addDocumentListener(object : DocumentListener {
@@ -31,7 +37,6 @@ class ReferencePopupProvider(val editorTextField: EditorTextField, val contextRe
         val at = text.lastIndexOf('@', caret)
         if (text.endsWith("@") || force) {
             val prefix = if (force) "" else text.substring(at, caret)
-            println("show popup")
             showOrUpdatePopup(editorTextField, contextReferencePanel, prefix, at, force)
         } else {
             lookupPopup?.cancel()
@@ -73,14 +78,14 @@ class ReferencePopupProvider(val editorTextField: EditorTextField, val contextRe
                 val caret = editor.caretModel.currentCaret
 
                 when (e.keyCode) {
-                    java.awt.event.KeyEvent.VK_BACK_SPACE -> {
+                    KeyEvent.VK_BACK_SPACE -> {
                         val pos = caret.offset  // offset before deletion
                         if (pos > 0) {
                             removeTokenInlaysAtOffset(editor, pos - 1)
                         }
                     }
 
-                    java.awt.event.KeyEvent.VK_DELETE -> {
+                    KeyEvent.VK_DELETE -> {
                         val pos = caret.offset
                         removeTokenInlaysAtOffset(editor, pos)
                     }
@@ -108,12 +113,28 @@ class ReferencePopupProvider(val editorTextField: EditorTextField, val contextRe
         ) { selected ->
             // onInsert callback: when user selects e.g. "JButton"
             if (force) {
-                val label = RoundedTokenLabel(selected.text, selected.icon) {}.apply {
+                val attachment = ContextAttachment(
+                    title = selected.text,
+                    content = selected.resolveContent(),
+                    icon = selected.icon,
+                    navigationPath = selected.navigationPath
+                )
+                attachments[attachment.id] = attachment
+                val label = RoundedTokenLabel(
+                    selected.text,
+                    selected.icon,
+                    closable = true,
+                    onClose = {},
+                    onClick = selected.navigationPath?.let { path ->
+                        { openFile(editorTextField.project, path) }
+                    }
+                ).apply {
                     alignmentY = Component.CENTER_ALIGNMENT
                 }
                 contextReferencePanel.add(label)
                 refresh(contextReferencePanel)
                 label.onClose = {
+                    attachments.remove(attachment.id)
                     contextReferencePanel.remove(label)
                     refresh(contextReferencePanel)
                 }
@@ -147,6 +168,18 @@ class ReferencePopupProvider(val editorTextField: EditorTextField, val contextRe
         container.repaint()
     }
 
+    fun hasAttachments(): Boolean = attachments.isNotEmpty()
+
+    fun peekAttachments(): List<ContextAttachment> = attachments.values.toList()
+
+    fun detachAttachments(): List<ContextAttachment> {
+        val snapshot = attachments.values.toList()
+        attachments.clear()
+        contextReferencePanel.removeAll()
+        refresh(contextReferencePanel)
+        return snapshot
+    }
+
     fun addRoundedToken(editorTextField: EditorTextField, offset: Int, tokenText: String, icon: Icon?) {
         val editor = editorTextField.editor ?: return
         val inlayModel = editor.inlayModel
@@ -172,6 +205,23 @@ class ReferencePopupProvider(val editorTextField: EditorTextField, val contextRe
             if (renderer is RoundedTokenRenderer) {
                 inlay.dispose()
             }
+        }
+    }
+
+    data class ContextAttachment(
+        val id: UUID = UUID.randomUUID(),
+        val title: String,
+        val content: String,
+        val icon: Icon?,
+        val navigationPath: String?
+    )
+
+    private fun openFile(project: Project?, path: String) {
+        if (project == null) return
+        val file = LocalFileSystem.getInstance().findFileByPath(path) ?: return
+        ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) return@invokeLater
+            FileEditorManager.getInstance(project).openFile(file, true)
         }
     }
 }

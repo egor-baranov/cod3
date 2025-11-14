@@ -6,6 +6,7 @@ import ai.koog.prompt.streaming.StreamFrame
 import com.github.egorbaranov.cod3.settings.PluginSettingsState
 import com.github.egorbaranov.cod3.toolWindow.chat.ChatMessage
 import com.github.egorbaranov.cod3.toolWindow.chat.ChatRole
+import com.github.egorbaranov.cod3.toolWindow.chat.formatMessageWithAttachments
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
@@ -66,7 +67,7 @@ class KoogChatService() : CoroutineScope by CoroutineScope(SupervisorJob() + Dis
             system(systemPrompt)
             history.forEach { message ->
                 when (message.role) {
-                    ChatRole.USER -> user(message.content.trim())
+                    ChatRole.USER -> user(formatMessageWithAttachments(message.content, message.attachments))
                     ChatRole.ASSISTANT -> assistant(message.content.trim())
                 }
             }
