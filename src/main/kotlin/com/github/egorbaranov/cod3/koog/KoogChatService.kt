@@ -1,8 +1,6 @@
 package com.github.egorbaranov.cod3.koog
 
-import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.dsl.prompt
-import ai.koog.prompt.streaming.StreamFrame
 import com.github.egorbaranov.cod3.settings.PluginSettingsState
 import com.github.egorbaranov.cod3.toolWindow.chat.ChatMessage
 import com.github.egorbaranov.cod3.toolWindow.chat.ChatRole
@@ -26,8 +24,8 @@ class KoogChatService() : CoroutineScope by CoroutineScope(SupervisorJob() + Dis
     ): Job {
         val settings = PluginSettingsState.getInstance()
         val modelEntry = KoogModelCatalog.resolveEntry(settings.koogModelId)
-        val executor = try {
-            KoogExecutorFactory.create(settings, modelEntry.provider)
+        val streamingClient = try {
+            KoogExecutorFactory.createStreamingClient(settings, modelEntry.provider)
         } catch (e: IllegalStateException) {
             return launch { listener(KoogChatStreamEvent.Error(e)) }
         }
@@ -38,18 +36,10 @@ class KoogChatService() : CoroutineScope by CoroutineScope(SupervisorJob() + Dis
         return launch {
             val buffer = StringBuilder()
             try {
-                executor.executeStreaming(prompt, model, emptyList<ToolDescriptor>()).collect { frame ->
-                    when (frame) {
-                        is StreamFrame.Append -> {
-                            val chunk = frame.text.trim()
-                            if (chunk.isNotEmpty()) {
-                                buffer.append(chunk)
-                                listener(KoogChatStreamEvent.ContentDelta(chunk))
-                            }
-                        }
-
-                        is StreamFrame.End -> Unit
-                        is StreamFrame.ToolCall -> Unit
+                streamingClient.executeStreaming(prompt, model).collect { chunk ->
+                    if (chunk.isNotEmpty()) {
+                        buffer.append(chunk)
+                        listener(KoogChatStreamEvent.ContentDelta(chunk))
                     }
                 }
                 listener(KoogChatStreamEvent.Completed(buffer.toString().trim()))

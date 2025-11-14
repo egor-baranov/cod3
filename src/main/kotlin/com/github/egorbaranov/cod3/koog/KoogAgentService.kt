@@ -1,39 +1,35 @@
 package com.github.egorbaranov.cod3.koog
 
-import ai.koog.agents.core.agent.AIAgent
-import ai.koog.agents.core.feature.handler.agent.AgentCompletedContext
-import ai.koog.agents.core.feature.handler.streaming.LLMStreamingCompletedContext
-import ai.koog.agents.core.feature.handler.streaming.LLMStreamingFrameReceivedContext
-import ai.koog.agents.core.feature.handler.tool.ToolCallCompletedContext
-import ai.koog.agents.core.feature.handler.tool.ToolCallFailedContext
-import ai.koog.agents.core.feature.handler.tool.ToolCallStartingContext
-import ai.koog.agents.core.feature.handler.tool.ToolValidationFailedContext
-import ai.koog.agents.core.tools.DirectToolCallsEnabler
-import ai.koog.agents.core.tools.Tool
-import ai.koog.agents.core.tools.ToolDescriptor
-import ai.koog.agents.core.tools.ToolRegistry
-import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
-import ai.koog.agents.core.tools.reflect.tools
-import ai.koog.agents.features.eventHandler.feature.EventHandler
-import ai.koog.agents.mcp.McpToolRegistryProvider
-import ai.koog.agents.mcp.defaultStdioTransport
-import ai.koog.prompt.streaming.StreamFrame
+import ai.koog.prompt.dsl.prompt
 import com.github.egorbaranov.cod3.settings.PluginSettingsState
+import com.github.egorbaranov.cod3.toolWindow.chat.ChatMessage
+import com.github.egorbaranov.cod3.toolWindow.chat.ChatRole
+import com.google.gson.Gson
+import com.google.gson.JsonSyntaxException
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
-import com.intellij.util.execution.ParametersListUtil
-import kotlinx.coroutines.*
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import java.io.File
-import java.io.IOException
-import java.util.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlin.reflect.KFunction
+import kotlin.reflect.KParameter
+import kotlin.reflect.KType
+import kotlin.reflect.full.findAnnotation
+import kotlin.reflect.full.instanceParameter
+import kotlin.reflect.full.memberFunctions
+import ai.koog.agents.core.tools.annotations.Tool as KoogTool
+import ai.koog.agents.core.tools.annotations.LLMDescription
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 
 @Service(Service.Level.PROJECT)
 class KoogAgentService(
@@ -42,374 +38,339 @@ class KoogAgentService(
 
     private val logger = Logger.getInstance(KoogAgentService::class.java)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val sessions = ConcurrentHashMap<Int, KoogAgentSession>()
-    private val sessionMutex = Mutex()
+    private val gson = Gson()
+
+    private val conversations = ConcurrentHashMap<Int, MutableList<ChatMessage>>()
+    private val toolset = KoogIdeToolset(project)
+    private val toolDefinitions = buildToolDefinitions()
 
     fun run(
         chatId: Int,
         prompt: String,
         permissionHandler: ToolPermissionHandler,
         listener: (KoogStreamEvent) -> Unit
-    ): Job {
-        val trimmed = prompt.trim()
-        require(trimmed.isNotEmpty()) { "Koog prompt must not be blank." }
+    ) = scope.launch {
+        val history = conversations.getOrPut(chatId) { mutableListOf() }
+        history += ChatMessage(ChatRole.USER, prompt)
 
-        return scope.launch {
-            val session = prepareFreshSession(chatId, permissionHandler)
-            session.run(trimmed, listener)
-        }
-    }
-
-    private suspend fun prepareFreshSession(
-        chatId: Int,
-        permissionHandler: ToolPermissionHandler
-    ): KoogAgentSession = sessionMutex.withLock {
-        sessions.remove(chatId)?.close()
-        val session = createSession(permissionHandler)
-        sessions[chatId] = session
-        session
-    }
-
-    private suspend fun createSession(permissionHandler: ToolPermissionHandler): KoogAgentSession =
-        withContext(Dispatchers.IO) {
         val settings = PluginSettingsState.getInstance()
         val modelEntry = KoogModelCatalog.resolveEntry(settings.koogModelId)
-        val executor = KoogExecutorFactory.create(settings, modelEntry.provider)
-        val eventBridge = KoogEventBridge()
-        val toolRegistry = ToolRegistry {
-            tools(KoogIdeToolset(project))
-        }.also {
-            logger.warn("Koog IDE tools registered: ${it.tools.map { tool -> tool.name }}")
+        val streamingClient = try {
+            KoogExecutorFactory.createStreamingClient(settings, modelEntry.provider)
+        } catch (ex: IllegalStateException) {
+            listener(KoogStreamEvent.Error(ex))
+            return@launch
         }
 
-        val mcpHandle = createMcpHandle(settings)
-        val registry = mcpHandle?.let { toolRegistry + it.registry } ?: toolRegistry
-        logger.warn("Koog tool registry active set: ${registry.tools.map { tool -> tool.name }}")
+        val systemPrompt = buildStreamingSystemPrompt(settings.koogSystemPrompt)
+        val llmPrompt = buildPrompt(history, systemPrompt)
 
-        val requiredTools = listOf(
-            "write_file",
-            "edit_file",
-            "find",
-            "list_directory",
-            "grep_search",
-            "view_file",
-            "run_command"
-        )
-        fun normalize(name: String) = name.replace("_", "").lowercase()
-        val availableNormalized = registry.tools.associateBy { normalize(it.name) }
-        val missing = requiredTools.filter { required ->
-            availableNormalized[normalize(required)] == null
-        }
-        require(missing.isEmpty()) { "Missing Koog IDE tools: $missing; available=${registry.tools.map { it.name }}" }
-
-        val permissionedRegistry = wrapRegistryWithPermission(registry, permissionHandler)
-
-        val systemPrompt = settings.koogSystemPrompt.ifBlank {
-            DEFAULT_SYSTEM_PROMPT
-        }
-
-        val agent = AIAgent(
-            promptExecutor = executor,
-            llmModel = modelEntry.model,
-            toolRegistry = permissionedRegistry,
-            systemPrompt = systemPrompt
-        ) {
-            install(EventHandler) {
-                onLLMStreamingFrameReceived { ctx -> eventBridge.handleStreamFrame(ctx) }
-                onLLMStreamingFailed { ctx -> eventBridge.emit(KoogStreamEvent.Error(ctx.error)) }
-                onLLMStreamingCompleted { _: LLMStreamingCompletedContext -> }
-
-                onToolCallStarting { eventBridge.handleToolStarting(it) }
-                onToolCallCompleted { eventBridge.handleToolCompleted(it) }
-                onToolCallFailed { eventBridge.handleToolFailed(it) }
-                onToolValidationFailed { eventBridge.handleToolValidationFailed(it) }
-
-                onAgentCompleted { eventBridge.handleAgentCompleted(it) }
-                onAgentExecutionFailed { eventBridge.emit(KoogStreamEvent.Error(it.throwable)) }
+        val textBuffer = StringBuilder()
+        val toolJobs = mutableListOf<kotlinx.coroutines.Job>()
+        val parser = StreamingEventParser { payload ->
+            val eventType = payload.type?.lowercase() ?: return@StreamingEventParser
+            when (eventType) {
+                "text" -> {
+                    val chunk = payload.content.orEmpty()
+                    if (chunk.isNotEmpty()) {
+                        textBuffer.append(chunk)
+                        listener(KoogStreamEvent.ContentDelta(chunk))
+                    }
+                }
+                "tool" -> {
+                    val name = payload.name.orEmpty()
+                    val args = payload.arguments
+                        ?.mapValues { it.value?.toString().orEmpty() }
+                        .orEmpty()
+                    toolJobs += launch {
+                        executeToolInstruction(name, args, permissionHandler, listener)
+                    }
+                }
             }
         }
 
-        KoogAgentSession(agent, eventBridge, mcpHandle)
-    }
+        try {
+            streamingClient.executeStreaming(llmPrompt, modelEntry.model).collect { chunk ->
+                parser.append(chunk)
+            }
+            parser.finish()
+            toolJobs.forEach { it.join() }
 
-    private suspend fun createMcpHandle(settings: PluginSettingsState): McpHandle? {
-        val command = settings.koogMcpCommand.trim()
-        if (command.isEmpty()) return null
-
-        val parts = ParametersListUtil.parse(command)
-        if (parts.isEmpty()) return null
-
-        val processBuilder = ProcessBuilder(parts).apply {
-            val workingDir = settings.koogMcpWorkingDirectory.takeIf { it.isNotBlank() }
-                ?: project.basePath
-            workingDir?.let { directory(File(it)) }
-            redirectErrorStream(false)
-        }
-
-        val process = try {
-            processBuilder.start()
-        } catch (io: IOException) {
-            logger.warn("Failed to start MCP server process", io)
-            throw IllegalStateException("Cannot start MCP server: ${io.message}", io)
-        }
-
-        val transport = McpToolRegistryProvider.defaultStdioTransport(process)
-        val registry = try {
-            McpToolRegistryProvider.fromTransport(
-                transport = transport,
-                name = settings.koogMcpClientName.takeIf { it.isNotBlank() } ?: "cod3-koog-mcp"
-            )
+            val finalResponse = textBuffer.toString().trim()
+            if (finalResponse.isNotEmpty()) {
+                history += ChatMessage(ChatRole.ASSISTANT, finalResponse)
+            }
+            listener(KoogStreamEvent.Completed(finalResponse))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (ex: Exception) {
-            process.destroyForcibly()
-            logger.warn("Failed to initialise MCP registry", ex)
-            throw ex
+            logger.warn("Koog agent streaming failed", ex)
+            listener(KoogStreamEvent.Error(ex))
         }
-
-        return McpHandle(process, registry)
     }
 
-    companion object {
-        private const val DEFAULT_SYSTEM_PROMPT =
-            "You are Cod3, an IDE-native software engineer. " +
-                "Prefer editing files directly, keep changes minimal, and explain your intent clearly."
+    private suspend fun executeToolInstruction(
+        name: String,
+        arguments: Map<String, String>,
+        permissionHandler: ToolPermissionHandler,
+        listener: (KoogStreamEvent) -> Unit
+    ) {
+        val id = UUID.randomUUID().toString()
+        val snapshot = KoogToolCallSnapshot(
+            id = id,
+            name = name,
+            title = "Executing $name",
+            status = "running",
+            arguments = arguments,
+            output = emptyList()
+        )
+        listener(KoogStreamEvent.ToolCallUpdate(snapshot, final = false))
+
+        if (!permissionHandler.shouldExecute(name, arguments)) {
+            listener(
+                KoogStreamEvent.ToolCallUpdate(
+                    snapshot.copy(
+                        status = "declined",
+                        output = listOf("User declined to run $name.")
+                    ),
+                    final = true
+                )
+            )
+            return
+        }
+
+        val result = try {
+            invokeTool(name, arguments)
+        } catch (ex: Exception) {
+            logger.warn("Koog tool $name failed", ex)
+            listener(
+                KoogStreamEvent.ToolCallUpdate(
+                    snapshot.copy(
+                        status = "failed",
+                        output = listOf(ex.message ?: ex.javaClass.simpleName)
+                    ),
+                    final = true
+                )
+            )
+            return
+        }
+
+        listener(
+            KoogStreamEvent.ToolCallUpdate(
+                snapshot.copy(
+                    status = "completed",
+                    output = listOf(result)
+                ),
+                final = true
+            )
+        )
+    }
+
+    private fun invokeTool(name: String, arguments: Map<String, String>): String {
+        val definition = toolDefinitions[name]
+            ?: error("Unknown tool '$name'. Available: ${toolDefinitions.keys.joinToString()}")
+
+        val callArgs = mutableMapOf<KParameter, Any?>()
+        callArgs[definition.instanceParameter] = toolset
+        definition.parameters.forEach { parameter ->
+            val rawValue = arguments[parameter.name]
+            if (rawValue == null) {
+                if (!parameter.parameter.isOptional && !parameter.parameter.type.isMarkedNullable) {
+                    error("Missing argument '${parameter.name}' for tool '$name'.")
+                }
+            } else {
+                callArgs[parameter.parameter] = convertArgument(rawValue, parameter.parameter.type)
+            }
+        }
+
+        val result = definition.function.callBy(callArgs)
+        return result?.toString().orEmpty()
+    }
+
+    private fun convertArgument(value: String, targetType: KType): Any? {
+        val classifier = targetType.classifier
+        return when (classifier) {
+            Int::class -> value.toIntOrNull() ?: error("Expected integer but got '$value'")
+            Boolean::class -> value.equals("true", ignoreCase = true)
+            else -> value
+        }
+    }
+
+    private fun buildPrompt(history: List<ChatMessage>, systemPrompt: String) =
+        prompt(id = "cod3-agent-${UUID.randomUUID()}") {
+            system(systemPrompt)
+            history.forEach { message ->
+                when (message.role) {
+                    ChatRole.USER -> user(message.content)
+                    ChatRole.ASSISTANT -> assistant(message.content)
+                }
+            }
+        }
+
+    private fun buildStreamingSystemPrompt(customPrompt: String): String {
+        val base = if (customPrompt.isBlank()) DEFAULT_SYSTEM_PROMPT else customPrompt.trim()
+        return buildString {
+            appendLine(base)
+            appendLine()
+            appendLine(
+                "You MUST respond as newline-delimited JSON events. " +
+                    "Every line must be a single JSON object."
+            )
+            appendLine(
+                """Valid event shapes:
+{"type":"text","content":"<plain language update (escape newlines as \\n, keep chunks <= 300 chars)>"} 
+{"type":"tool","name":"<tool name>","arguments":{"arg1":"value","arg2":"value"}}"""
+            )
+            appendLine()
+            appendLine("Available tools:")
+            toolDefinitions.values.forEach { def ->
+                appendLine(" - ${def.name}(${def.parameters.joinToString { it.name }}): ${def.description}")
+            }
+            appendLine()
+            appendLine("Never output Markdown or free text outside the JSON events.")
+            appendLine("Only call tools listed above and provide all required arguments.")
+            appendLine("Continue emitting text events after tool calls to explain the work.")
+        }
+    }
+
+    private fun buildToolDefinitions(): Map<String, ToolDefinition> {
+        return KoogIdeToolset::class.memberFunctions
+            .mapNotNull { function ->
+                val annotation = function.findAnnotation<KoogTool>() ?: return@mapNotNull null
+                val instanceParameter = function.instanceParameter ?: return@mapNotNull null
+                val description = function.findAnnotation<LLMDescription>()?.description ?: function.name
+                val parameters = function.parameters
+                    .filter { it != instanceParameter }
+                    .map { parameter ->
+                        val name = parameter.name ?: return@mapNotNull null
+                        ToolParameter(
+                            name = name,
+                            description = parameter.findAnnotation<LLMDescription>()?.description,
+                            parameter = parameter
+                        )
+                    }
+                ToolDefinition(
+                    name = annotation.customName.ifBlank { function.name },
+                    description = description,
+                    function = function,
+                    instanceParameter = instanceParameter,
+                    parameters = parameters
+                )
+            }
+            .associateBy { it.name }
     }
 
     override fun dispose() {
-        scope.coroutineContext.cancel()
-        sessions.values.forEach { it.close() }
-        sessions.clear()
+        scope.cancel()
+    }
+
+    private inner class StreamingEventParser(
+        private val onEvent: (StreamingPayload) -> Unit
+    ) {
+        private val buffer = StringBuilder()
+
+        fun append(chunk: String) {
+            buffer.append(chunk)
+            drain()
+        }
+
+        fun finish() {
+            drain(final = true)
+        }
+
+        private fun drain(final: Boolean = false) {
+            while (true) {
+                val newline = buffer.indexOf("\n")
+                if (newline == -1) {
+                    if (final && buffer.isNotEmpty()) {
+                        val remaining = buffer.toString().trim()
+                        buffer.clear()
+                        if (remaining.isNotEmpty()) {
+                            parseLine(remaining)
+                        }
+                    }
+                    return
+                }
+                val line = buffer.substring(0, newline).trim()
+                buffer.delete(0, newline + 1)
+                if (line.isNotEmpty()) {
+                    parseLine(line)
+                }
+            }
+        }
+
+        private fun parseLine(line: String) {
+            try {
+                val payload = gson.fromJson(sanitizeJsonLine(line), StreamingPayload::class.java)
+                if (payload.type.isNullOrBlank()) return
+                val decoded = payload.copy(
+                    content = payload.content?.replace("\\n", "\n")
+                )
+                onEvent(decoded)
+            } catch (ex: JsonSyntaxException) {
+                logger.warn("Failed to parse streaming line: $line", ex)
+            }
+        }
+    }
+
+    private fun sanitizeJsonLine(line: String): String {
+        val sb = StringBuilder(line.length + 8)
+        var i = 0
+        while (i < line.length) {
+            val ch = line[i]
+            if (ch == '\\') {
+                val next = line.getOrNull(i + 1)
+                if (next == null) {
+                    sb.append("\\\\")
+                } else if (next in listOf('"', '\\', '/', 'b', 'f', 'n', 'r', 't')) {
+                    sb.append('\\').append(next)
+                    i++
+                } else if (next == 'u' && i + 5 < line.length) {
+                    sb.append("\\u").append(line.substring(i + 2, i + 6))
+                    i += 5
+                } else {
+                    sb.append("\\\\").append(next)
+                    i++
+                }
+            } else {
+                sb.append(ch)
+            }
+            i++
+        }
+        return sb.toString()
+    }
+
+    private data class ToolDefinition(
+        val name: String,
+        val description: String,
+        val function: KFunction<*>,
+        val instanceParameter: KParameter,
+        val parameters: List<ToolParameter>
+    )
+
+    private data class ToolParameter(
+        val name: String,
+        val description: String?,
+        val parameter: KParameter
+    )
+
+    private data class StreamingPayload(
+        val type: String?,
+        val content: String? = null,
+        val name: String? = null,
+        val arguments: Map<String, Any?>? = null
+    )
+
+    companion object {
+        private const val DEFAULT_SYSTEM_PROMPT =
+            "You are Cod3, an IDE-native software engineer focused on precise, minimal edits."
     }
 }
+
+internal fun Project.koogAgentService(): KoogAgentService = service()
 
 fun interface ToolPermissionHandler {
     fun shouldExecute(toolName: String?, args: Map<String, String>?): Boolean
-}
-
-private fun wrapRegistryWithPermission(
-    registry: ToolRegistry,
-    handler: ToolPermissionHandler
-): ToolRegistry {
-    if (registry.tools.isEmpty()) return registry
-    return ToolRegistry {
-        tools(
-            registry.tools.map { tool ->
-                @Suppress("UNCHECKED_CAST")
-                PermissionedTool(tool as Tool<Any?, Any?>, handler) as Tool<*, *>
-            }
-        )
-    }
-}
-
-@OptIn(InternalAgentToolsApi::class)
-private class PermissionedTool<TArgs, TResult>(
-    private val delegate: Tool<TArgs, TResult>,
-    private val handler: ToolPermissionHandler
-) : Tool<TArgs, TResult>() {
-
-    override val argsSerializer = delegate.argsSerializer
-    override val resultSerializer = delegate.resultSerializer
-    override val description: String
-        get() = delegate.description
-    override val name: String
-        get() = delegate.name
-    override val descriptor: ToolDescriptor
-        get() = delegate.descriptor
-
-    override suspend fun execute(args: TArgs): TResult {
-        val readableArgs = args.asReadableArgs()
-        if (!handler.shouldExecute(name, readableArgs)) {
-            throw ToolPermissionDeniedException(name)
-        }
-        return delegate.execute(args, DIRECT_CALLS_ENABLER)
-    }
-}
-
-@OptIn(InternalAgentToolsApi::class)
-private object DIRECT_CALLS_ENABLER : DirectToolCallsEnabler
-
-private class ToolPermissionDeniedException(toolName: String) :
-    IllegalStateException("Tool $toolName execution denied by user.")
-
-private fun Any?.asReadableArgs(): Map<String, String>? = when (this) {
-    null -> null
-    is Map<*, *> -> entries.mapNotNull { (key, value) ->
-        (key as? String)?.let { it to (value?.toString() ?: "") }
-    }.toMap()
-    is Iterable<*> -> this.mapIndexed { index, value -> index.toString() to (value?.toString() ?: "") }.toMap()
-    else -> mapOf("value" to this.toString())
-}
-
-private class KoogAgentSession(
-    private val agent: AIAgent<String, String>,
-    private val eventBridge: KoogEventBridge,
-    private val mcpHandle: McpHandle?
-) {
-    private val mutex = Mutex()
-
-    suspend fun run(prompt: String, listener: (KoogStreamEvent) -> Unit) {
-        mutex.withLock {
-            eventBridge.useListener(listener) {
-                try {
-                    val result = agent.run(prompt)
-                    eventBridge.emitCompletion(result)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (ex: Exception) {
-                    eventBridge.emit(KoogStreamEvent.Error(ex))
-                }
-            }
-        }
-    }
-
-    fun close() {
-        runCatching { runBlocking { agent.close() } }
-        mcpHandle?.close()
-    }
-}
-
-private class KoogEventBridge {
-    private val listenerRef = AtomicReference<(KoogStreamEvent) -> Unit>()
-    private val completed = AtomicBoolean(false)
-    private val toolStore = KoogToolStore()
-
-    suspend fun useListener(listener: (KoogStreamEvent) -> Unit, block: suspend () -> Unit) {
-        listenerRef.set(listener)
-        completed.set(false)
-        try {
-            block()
-        } finally {
-            listenerRef.set(null)
-        }
-    }
-
-    fun emit(event: KoogStreamEvent) {
-        listenerRef.get()?.invoke(event)
-    }
-
-    fun emitCompletion(result: String) {
-        if (completed.compareAndSet(false, true)) {
-            emit(KoogStreamEvent.Completed(result))
-        }
-    }
-
-    fun handleStreamFrame(ctx: LLMStreamingFrameReceivedContext) {
-        when (val frame = ctx.streamFrame) {
-            is StreamFrame.Append -> emit(KoogStreamEvent.ContentDelta(frame.text))
-            is StreamFrame.End -> Unit
-            is StreamFrame.ToolCall -> {
-                toolStore.handleStreamingToolCall(frame)?.let {
-                    emit(KoogStreamEvent.ToolCallUpdate(it, final = false))
-                }
-            }
-        }
-    }
-
-    fun handleToolStarting(ctx: ToolCallStartingContext) {
-        val view = toolStore.onStart(ctx)
-        emit(KoogStreamEvent.ToolCallUpdate(view, final = false))
-    }
-
-    fun handleToolCompleted(ctx: ToolCallCompletedContext) {
-        val view = toolStore.onCompleted(ctx, success = true)
-        emit(KoogStreamEvent.ToolCallUpdate(view, final = true))
-    }
-
-    fun handleToolFailed(ctx: ToolCallFailedContext) {
-        val view = toolStore.onFailed(ctx)
-        emit(KoogStreamEvent.ToolCallUpdate(view, final = true))
-    }
-
-    fun handleToolValidationFailed(ctx: ToolValidationFailedContext) {
-        val view = toolStore.onValidationFailed(ctx)
-        emit(KoogStreamEvent.ToolCallUpdate(view, final = true))
-    }
-
-    fun handleAgentCompleted(ctx: AgentCompletedContext) {
-        emitCompletion(ctx.result?.toString().orEmpty())
-    }
-}
-
-private class KoogToolStore {
-    private val snapshots = ConcurrentHashMap<String, KoogToolCallSnapshot>()
-
-    fun handleStreamingToolCall(frame: StreamFrame.ToolCall): KoogToolCallSnapshot? {
-        val id = frame.id ?: return null
-        val snapshot = snapshots[id]
-        return snapshot?.copy(
-            arguments = snapshot.arguments + mapOf("stream" to frame.content),
-            status = "streaming"
-        )?.also { snapshots[id] = it }
-    }
-
-    fun onStart(ctx: ToolCallStartingContext): KoogToolCallSnapshot {
-        val id = ctx.toolCallId ?: UUID.randomUUID().toString()
-        val snapshot = KoogToolCallSnapshot(
-            id = id,
-            name = ctx.tool.name,
-            title = ctx.tool.description,
-            status = "running",
-            arguments = encodeArgs(ctx.toolArgs),
-            output = emptyList()
-        )
-        snapshots[id] = snapshot
-        return snapshot
-    }
-
-    fun onCompleted(ctx: ToolCallCompletedContext, success: Boolean): KoogToolCallSnapshot {
-        val id = ctx.toolCallId ?: UUID.randomUUID().toString()
-        val prev = snapshots[id]
-        val snapshot = (prev ?: onStart(ToolCallStartingContext(ctx.runId, id, ctx.tool, ctx.toolArgs))).copy(
-            status = if (success) "completed" else "failed",
-            output = encodeResult(ctx.result)
-        )
-        snapshots[id] = snapshot
-        return snapshot
-    }
-
-    fun onFailed(ctx: ToolCallFailedContext): KoogToolCallSnapshot {
-        val id = ctx.toolCallId ?: UUID.randomUUID().toString()
-        val prev = snapshots[id]
-        val snapshot = (prev ?: onStart(ToolCallStartingContext(ctx.runId, id, ctx.tool, ctx.toolArgs))).copy(
-            status = "failed",
-            output = listOf(ctx.throwable.message ?: ctx.throwable.javaClass.simpleName)
-        )
-        snapshots[id] = snapshot
-        return snapshot
-    }
-
-    fun onValidationFailed(ctx: ToolValidationFailedContext): KoogToolCallSnapshot {
-        val id = ctx.toolCallId ?: UUID.randomUUID().toString()
-        val prev = snapshots[id]
-        val snapshot = (prev ?: onStart(ToolCallStartingContext(ctx.runId, id, ctx.tool, ctx.toolArgs))).copy(
-            status = "invalid",
-            output = listOf(ctx.error)
-        )
-        snapshots[id] = snapshot
-        return snapshot
-    }
-
-    private fun encodeArgs(args: Any?): Map<String, String> =
-        when (args) {
-            null -> emptyMap()
-            is Map<*, *> -> args.mapNotNull { (key, value) ->
-                (key as? String)?.let { it to (value?.toString() ?: "") }
-            }.toMap()
-            else -> mapOf("value" to args.toString())
-        }
-
-    private fun encodeResult(result: Any?): List<String> {
-        if (result == null) return emptyList()
-        return listOf(result.toString())
-    }
-}
-
-private data class McpHandle(
-    val process: Process,
-    val registry: ToolRegistry
-) {
-    fun close() {
-        runCatching { process.destroy() }
-    }
 }
 
 sealed interface KoogStreamEvent {
@@ -427,5 +388,3 @@ data class KoogToolCallSnapshot(
     val arguments: Map<String, String>,
     val output: List<String>
 )
-
-internal fun Project.koogAgentService(): KoogAgentService = service()

@@ -1,14 +1,20 @@
 package com.github.egorbaranov.cod3.koog
 
+import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.executor.clients.anthropic.AnthropicClientSettings
 import ai.koog.prompt.executor.clients.anthropic.AnthropicLLMClient
 import ai.koog.prompt.executor.clients.google.GoogleClientSettings
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
+import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.llms.SingleLLMPromptExecutor
 import ai.koog.prompt.executor.llms.all.simpleGoogleAIExecutor
 import ai.koog.prompt.executor.llms.all.simpleOpenAIExecutor
+import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.streaming.StreamFrame
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.transform
 import com.github.egorbaranov.cod3.settings.PluginSettingsState
 
 internal object KoogExecutorFactory {
@@ -19,6 +25,14 @@ internal object KoogExecutorFactory {
             KoogModelCatalog.Provider.ANTHROPIC -> createAnthropicExecutor(settings)
             KoogModelCatalog.Provider.GOOGLE -> createGoogleExecutor(settings)
         }
+    }
+
+    fun createStreamingClient(
+        settings: PluginSettingsState,
+        provider: KoogModelCatalog.Provider
+    ): KoogStreamingClient {
+        val executor = create(settings, provider)
+        return ExecutorStreamingClient(executor)
     }
 
     private fun createOpenAIExecutor(settings: PluginSettingsState): SingleLLMPromptExecutor {
@@ -55,3 +69,23 @@ internal object KoogExecutorFactory {
         }
     }
 }
+
+internal interface KoogStreamingClient {
+    suspend fun executeStreaming(prompt: Prompt, model: LLModel): Flow<String>
+}
+
+private class ExecutorStreamingClient(
+    private val executor: SingleLLMPromptExecutor
+) : KoogStreamingClient {
+    override suspend fun executeStreaming(prompt: Prompt, model: LLModel): Flow<String> =
+        executor.executeStreaming(prompt, model, emptyList<ToolDescriptor>())
+            .toTextFlow()
+}
+
+private fun Flow<StreamFrame>.toTextFlow(): Flow<String> =
+    transform { frame ->
+        if (frame is StreamFrame.Append) {
+            val chunk = frame.text
+            if (chunk.isNotEmpty()) emit(chunk)
+        }
+    }
