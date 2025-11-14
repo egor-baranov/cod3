@@ -12,13 +12,10 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.collect
-import java.util.UUID
+import java.util.*
 
 @Service(Service.Level.PROJECT)
-class KoogChatService(
-    private val project: Project
-) : CoroutineScope by CoroutineScope(SupervisorJob() + Dispatchers.IO), Disposable {
+class KoogChatService() : CoroutineScope by CoroutineScope(SupervisorJob() + Dispatchers.IO), Disposable {
 
     private val logger = Logger.getInstance(KoogChatService::class.java)
 
@@ -34,9 +31,7 @@ class KoogChatService(
             return launch { listener(KoogChatStreamEvent.Error(e)) }
         }
         val model = modelEntry.model
-        val systemPrompt = settings.koogSystemPrompt.ifBlank {
-            DEFAULT_SYSTEM_PROMPT
-        }
+        val systemPrompt = buildSystemPrompt(settings.koogSystemPrompt)
         val prompt = buildPrompt(history, systemPrompt)
 
         return launch {
@@ -45,9 +40,10 @@ class KoogChatService(
                 executor.executeStreaming(prompt, model, emptyList<ToolDescriptor>()).collect { frame ->
                     when (frame) {
                         is StreamFrame.Append -> {
-                            if (frame.text.isNotEmpty()) {
-                                buffer.append(frame.text)
-                                listener(KoogChatStreamEvent.ContentDelta(frame.text))
+                            val chunk = frame.text.trim()
+                            if (chunk.isNotEmpty()) {
+                                buffer.append(chunk)
+                                listener(KoogChatStreamEvent.ContentDelta(chunk))
                             }
                         }
 
@@ -55,7 +51,7 @@ class KoogChatService(
                         is StreamFrame.ToolCall -> Unit
                     }
                 }
-                listener(KoogChatStreamEvent.Completed(buffer.toString()))
+                listener(KoogChatStreamEvent.Completed(buffer.toString().trim()))
             } catch (ex: Exception) {
                 logger.warn("Koog chat streaming failed", ex)
                 listener(KoogChatStreamEvent.Error(ex))
@@ -70,8 +66,8 @@ class KoogChatService(
             system(systemPrompt)
             history.forEach { message ->
                 when (message.role) {
-                    ChatRole.USER -> user(message.content)
-                    ChatRole.ASSISTANT -> assistant(message.content)
+                    ChatRole.USER -> user(message.content.trim())
+                    ChatRole.ASSISTANT -> assistant(message.content.trim())
                 }
             }
         }
@@ -79,6 +75,20 @@ class KoogChatService(
     companion object {
         private const val DEFAULT_SYSTEM_PROMPT =
             "You are Cod3, an IDE-native software engineer focused on precise, minimal edits."
+        private const val CODE_BLOCK_STYLE_PROMPT =
+            "When using Markdown code fences, never include language identifiers. " +
+                "Use plain ``` only."
+
+        private fun buildSystemPrompt(custom: String): String = buildString {
+            if (custom.isBlank()) {
+                append(DEFAULT_SYSTEM_PROMPT)
+            } else {
+                append(custom.trim())
+            }
+            appendLine()
+            appendLine()
+            append(CODE_BLOCK_STYLE_PROMPT)
+        }
     }
     override fun dispose() {
         coroutineContext.cancel()

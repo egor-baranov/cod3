@@ -1,5 +1,6 @@
 package com.github.egorbaranov.cod3.completions.codeCompletion
 
+import com.github.egorbaranov.cod3.settings.PluginSettingsState
 import com.intellij.codeInsight.inline.completion.DebouncedInlineCompletionProvider
 import com.intellij.codeInsight.inline.completion.InlineCompletionEvent
 import com.intellij.codeInsight.inline.completion.InlineCompletionProviderID
@@ -28,7 +29,8 @@ class CodeCompletionProvider : DebouncedInlineCompletionProvider() {
     override val id: InlineCompletionProviderID
         get() = InlineCompletionProviderID("Cod3")
 
-    override fun isEnabled(event: InlineCompletionEvent): Boolean = true
+    override fun isEnabled(event: InlineCompletionEvent): Boolean =
+        PluginSettingsState.getInstance().codeCompletionEnabled
 
     override suspend fun getSuggestionDebounced(request: InlineCompletionRequest): InlineCompletionSuggestion {
         val editor = request.editor

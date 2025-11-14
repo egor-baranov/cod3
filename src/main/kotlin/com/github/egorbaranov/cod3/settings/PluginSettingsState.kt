@@ -36,6 +36,8 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
     var useKoogAgents: Boolean = false
     var koogSystemPrompt: String = DEFAULT_KOOG_SYSTEM_PROMPT
     var koogModelId: String = DEFAULT_KOOG_MODEL_ID
+    var codeCompletionEnabled: Boolean = true
+    var codeCompletionModelId: String = DEFAULT_KOOG_MODEL_ID
     var koogMcpCommand: String = ""
     var koogMcpWorkingDirectory: String = ""
     var koogMcpClientName: String = "cod3-koog-mcp"
@@ -70,6 +72,8 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
         target.useKoogAgents = this.useKoogAgents
         target.koogSystemPrompt = this.koogSystemPrompt
         target.koogModelId = this.koogModelId
+        target.codeCompletionEnabled = this.codeCompletionEnabled
+        target.codeCompletionModelId = this.codeCompletionModelId
         target.koogMcpCommand = this.koogMcpCommand
         target.koogMcpWorkingDirectory = this.koogMcpWorkingDirectory
         target.koogMcpClientName = this.koogMcpClientName

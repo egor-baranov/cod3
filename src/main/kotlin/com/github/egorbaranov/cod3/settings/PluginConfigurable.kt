@@ -4,8 +4,6 @@ import com.github.egorbaranov.cod3.koog.KoogModelCatalog
 import com.github.egorbaranov.cod3.ui.components.createModelComboBox
 import com.github.egorbaranov.cod3.util.UIUtils
 import com.intellij.openapi.options.SearchableConfigurable
-import com.intellij.openapi.project.Project
-import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.util.NlsContexts
 import com.intellij.ui.JBColor
@@ -34,6 +32,9 @@ class PluginConfigurable : SearchableConfigurable {
     private lateinit var googleApiKeyField: JBTextField
     private lateinit var googleApiUrlField: JBTextField
 
+    private lateinit var codeCompletionEnabledCheckbox: JBCheckBox
+    private lateinit var codeCompletionModelCombo: ComboBox<KoogModelCatalog.Entry>
+
     private lateinit var useKoogCheckbox: JBCheckBox
     private lateinit var koogPromptArea: JBTextArea
     private lateinit var koogModelCombo: ComboBox<KoogModelCatalog.Entry>
@@ -55,10 +56,6 @@ class PluginConfigurable : SearchableConfigurable {
     @NlsContexts.ConfigurableName
     override fun getDisplayName(): String = "My Plugin Settings"
 
-    private val project: Project? by lazy {
-        ProjectManager.getInstance().openProjects.firstOrNull()
-    }
-
     override fun createComponent(): JComponent {
         val settings = PluginSettingsState.getInstance()
         openAiApiKeyField = JBTextField(settings.openAIApiKey, 40)
@@ -77,6 +74,37 @@ class PluginConfigurable : SearchableConfigurable {
             settings.googleApiUrl.ifBlank { PluginSettingsState.DEFAULT_GOOGLE_API_URL },
             40
         )
+
+        codeCompletionEnabledCheckbox = JBCheckBox("Enable code completion").apply {
+            isSelected = settings.codeCompletionEnabled
+            addActionListener { updateCodeCompletionFieldsEnabled() }
+        }
+        codeCompletionModelCombo = ComboBox(KoogModelCatalog.availableModels.toTypedArray()).apply {
+            renderer = object : ListCellRenderer<KoogModelCatalog.Entry> {
+                private val delegate = DefaultListCellRenderer()
+                override fun getListCellRendererComponent(
+                    list: JList<out KoogModelCatalog.Entry>?,
+                    value: KoogModelCatalog.Entry?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean
+                ): Component {
+                    val component = delegate.getListCellRendererComponent(
+                        list,
+                        value?.label ?: "Select model",
+                        index,
+                        isSelected,
+                        cellHasFocus
+                    )
+                    if (component is JLabel) {
+                        component.icon = value?.provider?.icon
+                    }
+                    return component
+                }
+            }
+            selectedItem = KoogModelCatalog.availableModels.firstOrNull { it.id == settings.codeCompletionModelId }
+                ?: KoogModelCatalog.availableModels.first()
+        }
 
         useKoogCheckbox = JBCheckBox("Enable Koog agent (experimental)").apply {
             isSelected = settings.useKoogAgents
@@ -125,6 +153,15 @@ class PluginConfigurable : SearchableConfigurable {
             group("Model Configuration") {
                 row("Model") {
                     cell(createModelComboBox())
+                }
+            }
+
+            group("Code Completion Configuration") {
+                row {
+                    cell(codeCompletionEnabledCheckbox)
+                }
+                row("Model") {
+                    cell(codeCompletionModelCombo).align(AlignX.FILL)
                 }
             }
 
@@ -205,6 +242,7 @@ class PluginConfigurable : SearchableConfigurable {
             }
         }
         updateKoogFieldsEnabled()
+        updateCodeCompletionFieldsEnabled()
         updateAcpFieldsEnabled()
         return mySettingsComponent!!
     }
@@ -218,6 +256,8 @@ class PluginConfigurable : SearchableConfigurable {
                 anthropicApiVersionField.text != settings.claudeApiVersion ||
                 googleApiKeyField.text != settings.googleApiKey ||
                 googleApiUrlField.text != settings.googleApiUrl ||
+                codeCompletionEnabledCheckbox.isSelected != settings.codeCompletionEnabled ||
+                (codeCompletionModelCombo.selectedItem as? KoogModelCatalog.Entry)?.id != settings.codeCompletionModelId ||
                 retryQuantityDropdown.item != settings.retryQuantity ||
                 useKoogCheckbox.isSelected != settings.useKoogAgents ||
                 koogPromptArea.text != settings.koogSystemPrompt ||
@@ -240,6 +280,9 @@ class PluginConfigurable : SearchableConfigurable {
         settings.claudeApiVersion = anthropicApiVersionField.text.trim().ifEmpty { PluginSettingsState.DEFAULT_ANTHROPIC_API_VERSION }
         settings.googleApiKey = googleApiKeyField.text.trim()
         settings.googleApiUrl = googleApiUrlField.text.trim().ifEmpty { PluginSettingsState.DEFAULT_GOOGLE_API_URL }
+        settings.codeCompletionEnabled = codeCompletionEnabledCheckbox.isSelected
+        settings.codeCompletionModelId =
+            (codeCompletionModelCombo.selectedItem as? KoogModelCatalog.Entry)?.id ?: settings.codeCompletionModelId
         settings.retryQuantity = retryQuantityDropdown.item
         settings.indexingSteps = indexingStepsDropdown.item
         settings.useKoogAgents = useKoogCheckbox.isSelected
@@ -263,6 +306,9 @@ class PluginConfigurable : SearchableConfigurable {
         anthropicApiVersionField.text = settings.claudeApiVersion.ifBlank { PluginSettingsState.DEFAULT_ANTHROPIC_API_VERSION }
         googleApiKeyField.text = settings.googleApiKey
         googleApiUrlField.text = settings.googleApiUrl.ifBlank { PluginSettingsState.DEFAULT_GOOGLE_API_URL }
+        codeCompletionEnabledCheckbox.isSelected = settings.codeCompletionEnabled
+        codeCompletionModelCombo.selectedItem = KoogModelCatalog.availableModels.firstOrNull { it.id == settings.codeCompletionModelId }
+            ?: KoogModelCatalog.availableModels.first()
         retryQuantityDropdown.item = settings.retryQuantity
         indexingStepsDropdown.item = settings.indexingSteps
         useKoogCheckbox.isSelected = settings.useKoogAgents
@@ -277,6 +323,7 @@ class PluginConfigurable : SearchableConfigurable {
         acpWorkingDirField.text = settings.acpAgentWorkingDirectory
         acpSessionRootField.text = settings.acpSessionRoot
         updateKoogFieldsEnabled()
+        updateCodeCompletionFieldsEnabled()
         updateAcpFieldsEnabled()
     }
     
@@ -309,6 +356,13 @@ class PluginConfigurable : SearchableConfigurable {
         }
         if (::koogMcpClientNameField.isInitialized) {
             koogMcpClientNameField.isEnabled = enabled
+        }
+    }
+
+    private fun updateCodeCompletionFieldsEnabled() {
+        val enabled = ::codeCompletionEnabledCheckbox.isInitialized && codeCompletionEnabledCheckbox.isSelected
+        if (::codeCompletionModelCombo.isInitialized) {
+            codeCompletionModelCombo.isEnabled = enabled
         }
     }
 
