@@ -9,6 +9,7 @@ import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.fileTypes.PlainTextFileType
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.IconLabelButton
@@ -18,6 +19,7 @@ import scaledBy
 import java.awt.*
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
+import java.awt.datatransfer.StringSelection
 import javax.swing.*
 import javax.swing.event.HyperlinkListener
 import javax.swing.text.DefaultCaret
@@ -93,13 +95,12 @@ class ChatBubble(
         println("blocks: ${blocks.map { "${it.type}, ${it.text}" }}")
         if (blocks.size > components.size) {
             blocks.takeLast(blocks.size - components.size)
-                .map { blockToComponent(blocks.last()) }
-                .forEachIndexed { idx, it ->
+                .map { blockToComponent(it) }
+                .forEachIndexed { idx, component ->
                     if (idx < (blocks.size - components.size) - 1) {
                         contentPanel.add(Box.createVerticalStrut(JBUI.scale(8)))
                     }
-
-                    contentPanel.add(it)
+                    contentPanel.add(component)
                 }
         } else {
             val lastBlock = blocks.last()
@@ -174,27 +175,62 @@ class ChatBubble(
     }
 
     private fun parseMarkdown(markdown: String): List<Block> {
-        var code = markdown.startsWith("```")
-        val result = mutableListOf<Block>()
-
-        println("blocks: ${markdown.split("```")}")
-
-        for (block in markdown.split("```").filter { it.isNotEmpty() }) {
-            result.add(
-                Block(
-                    block.trim().let {
-                        if (code) it.lines().drop(1).joinToString("\n").removeSuffix("\n``")
-                        else it
-                    },
-                    if (code) Block.BlockType.CODE else Block.BlockType.TEXT,
-                    language = block.lines().firstOrNull()?.takeIf { code }).also { v ->
-                        println("language: $v")
-                }
-            )
-            code = !code
+        if (!markdown.contains("```")) {
+            return listOf(Block(markdown, Block.BlockType.TEXT))
         }
 
-        return result
+        val blocks = mutableListOf<Block>()
+        var cursor = 0
+        val length = markdown.length
+
+        while (cursor < length) {
+            val fenceStart = markdown.indexOf("```", cursor)
+            if (fenceStart == -1) {
+                val tail = markdown.substring(cursor)
+                if (tail.isNotEmpty()) {
+                    blocks.add(Block(tail, Block.BlockType.TEXT))
+                }
+                break
+            }
+
+            if (fenceStart > cursor) {
+                val textSegment = markdown.substring(cursor, fenceStart)
+                if (textSegment.isNotEmpty()) {
+                    blocks.add(Block(textSegment, Block.BlockType.TEXT))
+                }
+            }
+
+            var language: String? = null
+            var bodyStart = fenceStart + 3
+            if (bodyStart >= length) break
+
+            if (markdown[bodyStart] != '\n' && markdown[bodyStart] != '\r') {
+                var langEnd = bodyStart
+                while (langEnd < length && markdown[langEnd] != '\n' && markdown[langEnd] != '\r') {
+                    langEnd++
+                }
+                if (langEnd > bodyStart) {
+                    language = markdown.substring(bodyStart, langEnd).trim().takeIf { it.isNotEmpty() }
+                    bodyStart = langEnd
+                }
+            }
+
+            if (bodyStart < length && markdown[bodyStart] == '\r') bodyStart++
+            if (bodyStart < length && markdown[bodyStart] == '\n') bodyStart++
+
+            val fenceEnd = markdown.indexOf("```", bodyStart)
+            if (fenceEnd == -1) {
+                val remaining = markdown.substring(fenceStart)
+                blocks.add(Block(remaining, Block.BlockType.TEXT))
+                break
+            }
+
+            val codeBody = markdown.substring(bodyStart, fenceEnd)
+            blocks.add(Block(codeBody, Block.BlockType.CODE, language))
+            cursor = fenceEnd + 3
+        }
+
+        return blocks
     }
 
     private fun blockToComponent(block: Block): JComponent {
@@ -254,20 +290,12 @@ class ChatBubble(
             background = JBColor.darkGray.darker().darker().darker()
             border = JBUI.Borders.empty(8, 0)
 
-            add(IconLabelButton(AllIcons.Actions.Execute.scaledBy(0.8)) { println("Apply clicked") }.apply {
-                text = "Apply"
+            add(IconLabelButton(Icons.Clipboard) {
+                CopyPasteManager.getInstance().setContents(StringSelection(code))
+            }.apply {
                 cursor = Cursor(Cursor.HAND_CURSOR)
                 minimumSize = preferredSize
-            })
-            add(IconLabelButton(AllIcons.Toolbar.AddSlot.scaledBy(0.8)) { println("Insert clicked") }.apply {
-                text = "Insert"
-                cursor = Cursor(Cursor.HAND_CURSOR)
-                minimumSize = preferredSize
-            })
-
-            add(IconLabelButton(Icons.Clipboard) { println("Clipboard clicked") }.apply {
-                cursor = Cursor(Cursor.HAND_CURSOR)
-                minimumSize = preferredSize
+                toolTipText = "Copy code"
             })
             add(IconLabelButton(AllIcons.Actions.More) { println("More clicked") }.apply {
                 cursor = Cursor(Cursor.HAND_CURSOR)
