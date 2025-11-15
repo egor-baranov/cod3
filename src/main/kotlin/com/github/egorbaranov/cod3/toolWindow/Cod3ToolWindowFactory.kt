@@ -10,6 +10,7 @@ import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.actionSystem.impl.ActionButton
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.SimpleToolWindowPanel
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.wm.ToolWindow
@@ -31,11 +32,12 @@ import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.RenderingHints
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JComponent
 import javax.swing.JLabel
-import javax.swing.JOptionPane
 import javax.swing.JPanel
 
 class Cod3ToolWindowFactory : ToolWindowFactory {
@@ -44,10 +46,15 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     private val list = JBList(listOf("Files & Folders", "Code", "Docs", "Git", "Web", "Recent Changes"))
     private val logger = Logger.getInstance(Cod3ToolWindowFactory::class.java)
 
-    var chatQuantity = 1
+    var chatQuantity = 0
     val messages = mutableMapOf<Int, MutableList<ChatMessage>>()
+    private val chatTabs = mutableMapOf<Int, ChatTabMeta>()
+    private lateinit var toolWindowRef: ToolWindow
+    private lateinit var projectRef: Project
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
+        toolWindowRef = toolWindow
+        projectRef = project
         toolWindow.title = "Cod3"
 
         // Set up title-bar actions: "Add", "History", "Settings"
@@ -78,22 +85,29 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     }
 
     private fun addChatTab(project: Project, toolWindow: ToolWindow) {
-        chatQuantity++
+        val chatId = ++chatQuantity
 
-        val controller = ChatTabController(project, chatQuantity, messages, logger)
+        val controller = ChatTabController(project, chatId, messages, logger)
         val panel = SimpleToolWindowPanel(true, true).apply {
             setContent(controller.createPanel())
         }
 
         val content: Content = ContentFactory.getInstance()
-            .createContent(panel, "Chat $chatQuantity", /* isLockable= */ false)
+            .createContent(panel, "Chat $chatId", /* isLockable= */ false)
             .apply {
                 isCloseable = true
                 setShouldDisposeContent(true)
+                setDisposer {
+                    chatTabs.remove(chatId)
+                    refreshHistoryContent()
+                }
             }
+
+        chatTabs[chatId] = ChatTabMeta("Chat $chatId", content)
 
         toolWindow.contentManager.addContent(content)
         toolWindow.contentManager.setSelectedContent(content)
+        refreshHistoryContent()
     }
 
     private fun addHistoryTab(project: Project, toolWindow: ToolWindow) {
@@ -124,14 +138,14 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
             border = JBUI.Borders.empty(4)
         }
 
-        val scroll = JBScrollPane(messageContainer).apply {
-//            verticalScrollBar.unitIncrement = JBUI.scale(16)
-        }
+        val scroll = JBScrollPane(messageContainer)
 
-        for (i in 1..chatQuantity) {
-            messageContainer.add(historyBubble("Chat $i"))
-            messageContainer.add(Box.createVerticalStrut(8))
-        }
+        chatTabs.entries
+            .sortedBy { it.key }
+            .forEach { (id, meta) ->
+                messageContainer.add(historyBubble(id, meta))
+                messageContainer.add(Box.createVerticalStrut(8))
+            }
 
         refresh(messageContainer)
         return JPanel(BorderLayout()).apply {
@@ -140,31 +154,49 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
     }
 
-    private fun historyBubble(text: String): JComponent {
-        val label = JLabel("<html>${text.replace("\n", "<br>")}</html>")
+    private fun historyBubble(chatId: Int, meta: ChatTabMeta): JComponent {
+        val label = JLabel("<html>${meta.title.replace("\n", "<br>")}</html>").apply {
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            addMouseListener(object : java.awt.event.MouseAdapter() {
+                override fun mouseClicked(e: java.awt.event.MouseEvent?) {
+                    openChatTab(chatId)
+                }
+            })
+        }
 
         class RenameAction : AnAction("Rename", "Rename chat", Icons.Edit) {
             override fun actionPerformed(e: AnActionEvent) {
-                JOptionPane.showMessageDialog(null, "Rename clicked for: $text")
+                val newName = Messages.showInputDialog(
+                    projectRef,
+                    "Enter new name:",
+                    "Rename Chat",
+                    null,
+                    meta.title,
+                    null
+                )?.trim()
+                if (!newName.isNullOrEmpty()) {
+                    renameChat(chatId, newName)
+                }
             }
         }
 
         class DeleteAction : AnAction("Delete", "Delete chat", Icons.Trash) {
             override fun actionPerformed(e: AnActionEvent) {
-                val result = JOptionPane.showConfirmDialog(
-                    null,
-                    "Delete this item?",
+                val result = Messages.showYesNoDialog(
+                    projectRef,
+                    "Delete ${meta.title}?",
                     "Confirm Delete",
-                    JOptionPane.YES_NO_OPTION
+                    Messages.getYesButton(),
+                    Messages.getNoButton(),
+                    null
                 )
-                if (result == JOptionPane.YES_OPTION) {
-                    // TODO implement deletion wiring
+                if (result == Messages.YES) {
+                    deleteChat(chatId)
                 }
             }
         }
 
         class MoreActionGroup : ActionGroup("More", true) {
-
             init {
                 templatePresentation.icon = AllIcons.Actions.More
                 templatePresentation.putClientProperty(ActionButton.HIDE_DROPDOWN_ICON, java.lang.Boolean.TRUE)
@@ -172,14 +204,15 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
             override fun getChildren(e: AnActionEvent?): Array<AnAction> {
                 return arrayOf(
-                    object : AnAction("Details") {
+                    object : AnAction("Open") {
                         override fun actionPerformed(e: AnActionEvent) {
-                            JOptionPane.showMessageDialog(null, "Details for: $text")
+                            openChatTab(chatId)
                         }
                     },
-                    object : AnAction("Copy") {
+                    object : AnAction("Copy Name") {
                         override fun actionPerformed(e: AnActionEvent) {
-                            // Placeholder for copy support
+                            val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                            clipboard.setContents(java.awt.datatransfer.StringSelection(meta.title), null)
                         }
                     }
                 )
@@ -201,15 +234,14 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
             }
 
         return object : JPanel(BorderLayout()) {
+            private val lightBg = JBColor(0xF4F6FF, 0x2A2C34)
             init {
+                border = JBUI.Borders.empty(12, 20, 12, 8)
+                background = lightBg
                 add(label, BorderLayout.CENTER)
                 add(actionToolbar.component.apply {
                     border = JBUI.Borders.empty()
                 }, BorderLayout.EAST)
-
-                isOpaque = true
-                background = JBColor.LIGHT_GRAY
-                border = JBUI.Borders.empty(12, 20, 12, 8)
                 cursor = Cursor(Cursor.HAND_CURSOR)
             }
 
@@ -227,10 +259,37 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                 }
             }
 
-            override fun getMaximumSize(): Dimension {
-                return Dimension(Int.MAX_VALUE, preferredSize.height)
-            }
+            override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
         }
+    }
+
+    private fun openChatTab(chatId: Int) {
+        val meta = chatTabs[chatId] ?: return
+        toolWindowRef.contentManager.setSelectedContent(meta.content)
+    }
+
+    private fun renameChat(chatId: Int, newName: String) {
+        val meta = chatTabs[chatId] ?: return
+        meta.title = newName
+        meta.content.displayName = newName
+        refreshHistoryContent()
+    }
+
+    private fun deleteChat(chatId: Int) {
+        val meta = chatTabs.remove(chatId) ?: return
+        messages.remove(chatId)
+        toolWindowRef.contentManager.removeContent(meta.content, true)
+        refreshHistoryContent()
+    }
+
+    private fun refreshHistoryContent() {
+        if (!::toolWindowRef.isInitialized) return
+        val cm = toolWindowRef.contentManager
+        val historyContent = cm.contents.firstOrNull { it.getUserData(HISTORY_TAB_KEY) == true } ?: return
+        val panel = historyContent.component as? SimpleToolWindowPanel ?: return
+        panel.setContent(createHistoryPanel(projectRef))
+        panel.revalidate()
+        panel.repaint()
     }
 
     private fun createBubble(text: String, bg: Color, assistant: Boolean = false): JComponent {
@@ -246,6 +305,8 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     private enum class Alignment { LEFT, RIGHT }
 
     companion object {
-        private val HISTORY_TAB_KEY = Key.create<Boolean>("com.example.Cod3.HISTORY_TAB")
+        private val HISTORY_TAB_KEY = Key.create<Boolean>("com.github.egorbaranov.cod3.HISTORY_TAB")
     }
+
+    private data class ChatTabMeta(var title: String, val content: Content)
 }

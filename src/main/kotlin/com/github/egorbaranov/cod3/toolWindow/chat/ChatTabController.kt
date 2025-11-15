@@ -516,7 +516,10 @@ internal class ChatTabController(
         }
 
         val payload = formatMessageWithAttachments(userMessage, attachments)
-        project.koogAgentService().run(chatIndex, payload, permissionHandler) { event ->
+        val conversation = messages.getOrPut(chatIndex) { mutableListOf() }
+        conversation.add(ChatMessage(ChatRole.USER, payload))
+
+        project.koogAgentService().run(chatIndex, payload, conversation, permissionHandler) { event ->
             when (event) {
                 is KoogStreamEvent.ContentDelta -> appendStreamingAssistant(accumulatedText, bubbleRef, event.text)
                 is KoogStreamEvent.ToolCallUpdate -> {
@@ -526,6 +529,9 @@ internal class ChatTabController(
                 is KoogStreamEvent.Completed -> {
                     if (accumulatedText.isEmpty()) {
                         appendStreamingAssistant(accumulatedText, bubbleRef, event.response)
+                    }
+                    if (event.response.isNotBlank()) {
+                        conversation.add(ChatMessage(ChatRole.ASSISTANT, event.response))
                     }
                 }
 

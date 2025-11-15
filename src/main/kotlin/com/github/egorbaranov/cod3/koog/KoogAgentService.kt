@@ -29,7 +29,6 @@ import kotlin.reflect.full.memberFunctions
 import ai.koog.agents.core.tools.annotations.Tool as KoogTool
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
 @Service(Service.Level.PROJECT)
 class KoogAgentService(
@@ -40,18 +39,16 @@ class KoogAgentService(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val gson = Gson()
 
-    private val conversations = ConcurrentHashMap<Int, MutableList<ChatMessage>>()
     private val toolset = KoogIdeToolset(project)
     private val toolDefinitions = buildToolDefinitions()
 
     fun run(
         chatId: Int,
         prompt: String,
+        history: MutableList<ChatMessage>,
         permissionHandler: ToolPermissionHandler,
         listener: (KoogStreamEvent) -> Unit
     ) = scope.launch {
-        val history = conversations.getOrPut(chatId) { mutableListOf() }
-        history += ChatMessage(ChatRole.USER, prompt)
 
         val settings = PluginSettingsState.getInstance()
         val modelEntry = KoogModelCatalog.resolveEntry(settings.koogModelId)
