@@ -106,7 +106,7 @@ class PluginConfigurable : SearchableConfigurable {
                 ?: KoogModelCatalog.availableModels.first()
         }
 
-        useKoogCheckbox = JBCheckBox("Enable Koog agent (experimental)").apply {
+        useKoogCheckbox = JBCheckBox("Enable agent mode").apply {
             isSelected = settings.useKoogAgents
             addActionListener { updateKoogFieldsEnabled() }
         }

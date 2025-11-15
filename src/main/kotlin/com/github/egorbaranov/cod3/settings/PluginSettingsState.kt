@@ -33,7 +33,7 @@ class PluginSettingsState : PersistentStateComponent<PluginSettingsState> {
     var retryQuantity: Int = 1
     var indexingSteps: Int = 1
 
-    var useKoogAgents: Boolean = false
+    var useKoogAgents: Boolean = true
     var koogSystemPrompt: String = DEFAULT_KOOG_SYSTEM_PROMPT
     var koogModelId: String = DEFAULT_KOOG_MODEL_ID
     var codeCompletionEnabled: Boolean = true

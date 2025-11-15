@@ -15,6 +15,7 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.IconLabelButton
 import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import scaledBy
 import java.awt.*
 import java.awt.event.ComponentAdapter
@@ -87,10 +88,24 @@ class ChatBubble(
     /**
      * Rebuilds contentPanel based on currentText and adjusts height.
      */
-    private fun rebuildContentAndAdjustHeight() {
+    private fun rebuildContentAndAdjustHeight(fullRefresh: Boolean = false) {
         val components = contentPanel.components
 
         val blocks = parseMarkdown(currentText)
+
+        if (fullRefresh) {
+            contentPanel.removeAll()
+            disposeEditors()
+            blocks.forEachIndexed { index, block ->
+                contentPanel.add(blockToComponent(block))
+                if (index < blocks.lastIndex) {
+                    contentPanel.add(Box.createVerticalStrut(JBUI.scale(8)))
+                }
+            }
+            contentPanel.revalidate()
+            contentPanel.repaint()
+            return
+        }
 
         println("blocks: ${blocks.map { "${it.type}, ${it.text}" }}")
         if (blocks.size > components.size) {
@@ -106,13 +121,13 @@ class ChatBubble(
             val lastBlock = blocks.last()
             if (lastBlock.type == Block.BlockType.TEXT) {
                 (components.last() as JTextPane).text = wrapTextStyles(lastBlock.text)
-            } else {
-                val lastEditor = createdEditors.last()
-                println("set text to editor: $lastEditor: ${lastBlock.text}")
-
-                WriteCommandAction.runWriteCommandAction(lastEditor.project) {
+            } else if (createdEditors.isNotEmpty()) {
+                WriteCommandAction.runWriteCommandAction(createdEditors.last().project) {
                     createdEditors.last().document.setText(lastBlock.text)
                 }
+            } else {
+                rebuildContentAndAdjustHeight(fullRefresh = true)
+                return
             }
         }
     }
@@ -165,13 +180,21 @@ class ChatBubble(
         super.paintComponent(g)
     }
 
+    override fun addNotify() {
+        super.addNotify()
+        SwingUtilities.invokeLater { rebuildContentAndAdjustHeight(fullRefresh = true) }
+    }
+
     override fun removeNotify() {
-        val factory = EditorFactory.getInstance()
-        for (editor in createdEditors) {
-            factory.releaseEditor(editor)
-        }
-        createdEditors.clear()
+        disposeEditors()
         super.removeNotify()
+    }
+
+    private fun disposeEditors() {
+        if (createdEditors.isEmpty()) return
+        val factory = EditorFactory.getInstance()
+        createdEditors.forEach { factory.releaseEditor(it) }
+        createdEditors.clear()
     }
 
     private fun parseMarkdown(markdown: String): List<Block> {
@@ -281,14 +304,18 @@ class ChatBubble(
             additionalColumnsCount = 0
         }
 
+        val editorBackground = JBColor.LIGHT_GRAY
         val editorComponent = editor.component
         editorComponent.alignmentX = Component.LEFT_ALIGNMENT
+        editorComponent.isOpaque = true
+        editorComponent.background = editorBackground
+        editor.contentComponent.isOpaque = true
+        editor.contentComponent.background = editorBackground
 
         // Create toolbar panel with buttons
-        val toolbar = JPanel(FlowLayout(FlowLayout.RIGHT, JBUI.scale(16), 0)).apply {
-            isOpaque = true
-            background = JBColor.darkGray.darker().darker().darker()
-            border = JBUI.Borders.empty(8, 0)
+        val toolbar = RoundedPanel(editorBackground).apply {
+            layout = FlowLayout(FlowLayout.RIGHT, JBUI.scale(12), 0)
+            border = JBUI.Borders.empty(8, 12, 4, 12)
 
             add(IconLabelButton(Icons.Clipboard) {
                 CopyPasteManager.getInstance().setContents(StringSelection(code))
@@ -304,9 +331,10 @@ class ChatBubble(
         }
 
         // Wrapper panel to hold toolbar on top + editor below
-        val wrapper = JPanel(BorderLayout()).apply {
-            isOpaque = false
+        val wrapper = RoundedPanel(editorBackground).apply {
+            layout = BorderLayout()
             alignmentX = Component.LEFT_ALIGNMENT
+            border = JBUI.Borders.empty(4, 6, 8, 6)
             add(toolbar, BorderLayout.NORTH)
             add(editorComponent, BorderLayout.CENTER)
         }
@@ -363,5 +391,26 @@ class ChatBubble(
     private fun isDarkBackground(bg: Color): Boolean {
         val lum = 0.299 * bg.red + 0.587 * bg.green + 0.114 * bg.blue
         return lum < 128
+    }
+    private class RoundedPanel(
+        private val fillColor: Color = UIUtil.getPanelBackground(),
+        private val radius: Int = JBUI.scale(12)
+    ) : JPanel() {
+
+        init {
+            isOpaque = false
+        }
+
+        override fun paintComponent(g: Graphics) {
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.color = fillColor
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                g2.fillRoundRect(0, 0, width, height, radius, radius)
+            } finally {
+                g2.dispose()
+            }
+            super.paintComponent(g)
+        }
     }
 }

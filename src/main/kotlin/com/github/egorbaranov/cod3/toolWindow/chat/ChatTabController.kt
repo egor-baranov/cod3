@@ -11,6 +11,7 @@ import com.github.egorbaranov.cod3.ui.components.ScrollableSpacedPanel
 import com.github.egorbaranov.cod3.ui.components.createModelComboBox
 import com.github.egorbaranov.cod3.ui.createResizableEditor
 import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
@@ -344,6 +345,8 @@ internal class ChatTabController(
                 e.presentation.text = agentMode.displayName
             }
 
+            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
             override fun createPopupActionGroup(button: JComponent?): DefaultActionGroup {
                 val comboPresentation = (button as? ComboBoxButton)?.presentation ?: templatePresentation
                 return DefaultActionGroup().apply {
@@ -357,6 +360,8 @@ internal class ChatTabController(
                             override fun update(e: AnActionEvent) {
                                 e.presentation.isEnabled = agentMode != mode
                             }
+
+                            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
                         })
                     }
                 }
