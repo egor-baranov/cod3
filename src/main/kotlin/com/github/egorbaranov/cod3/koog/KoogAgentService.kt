@@ -185,7 +185,11 @@ class KoogAgentService(
     private fun convertArgument(value: String, targetType: KType): Any? {
         val classifier = targetType.classifier
         return when (classifier) {
-            Int::class -> value.toIntOrNull() ?: error("Expected integer but got '$value'")
+            Int::class -> {
+                value.toIntOrNull()
+                    ?: value.toDoubleOrNull()?.toInt()
+                    ?: error("Expected integer but got '$value'")
+            }
             Boolean::class -> value.equals("true", ignoreCase = true)
             else -> value
         }
@@ -295,8 +299,19 @@ class KoogAgentService(
         }
 
         private fun parseLine(line: String) {
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) return
+            if (!trimmed.startsWith("{")) {
+                onEvent(
+                    StreamingPayload(
+                        type = "text",
+                        content = trimmed
+                    )
+                )
+                return
+            }
             try {
-                val payload = gson.fromJson(sanitizeJsonLine(line), StreamingPayload::class.java)
+                val payload = gson.fromJson(sanitizeJsonLine(trimmed), StreamingPayload::class.java)
                 if (payload.type.isNullOrBlank()) return
                 val decoded = payload.copy(
                     content = payload.content?.replace("\\n", "\n")

@@ -146,7 +146,11 @@ internal class ChatTabController(
         val settings = PluginSettingsState.getInstance()
         when {
             settings.useKoogAgents -> {
-                sendMessageViaKoogAgent(trimmed, attachments)
+                if (agentMode == AgentMode.CHAT) {
+                    sendMessageViaKoogChat(trimmed, attachments)
+                } else {
+                    sendMessageViaKoogAgent(trimmed, attachments)
+                }
                 return
             }
 
@@ -551,6 +555,16 @@ internal class ChatTabController(
                 is KoogStreamEvent.ContentDelta -> appendStreamingAssistant(accumulatedText, bubbleRef, event.text)
                 is KoogStreamEvent.ToolCallUpdate -> {
                     toolRenderer.render(event.snapshot.toViewModel(), event.final)
+                    if (event.final) {
+                        val outputText = event.snapshot.output.joinToString("\n").trim()
+                        if (outputText.isNotEmpty()) {
+                            appendStreamingAssistant(
+                                accumulatedText,
+                                bubbleRef,
+                                "\n$outputText\n"
+                            )
+                        }
+                    }
                 }
 
                 is KoogStreamEvent.Completed -> {
