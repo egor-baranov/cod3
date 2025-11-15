@@ -4,6 +4,7 @@ import ai.koog.prompt.dsl.prompt
 import com.github.egorbaranov.cod3.settings.PluginSettingsState
 import com.github.egorbaranov.cod3.toolWindow.chat.ChatMessage
 import com.github.egorbaranov.cod3.toolWindow.chat.ChatRole
+import com.github.egorbaranov.cod3.toolWindow.chat.formatMessageWithAttachments
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import com.intellij.openapi.Disposable
@@ -94,9 +95,6 @@ class KoogAgentService(
             toolJobs.forEach { it.join() }
 
             val finalResponse = textBuffer.toString().trim()
-            if (finalResponse.isNotEmpty()) {
-                history += ChatMessage(ChatRole.ASSISTANT, finalResponse)
-            }
             listener(KoogStreamEvent.Completed(finalResponse))
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -198,7 +196,7 @@ class KoogAgentService(
             system(systemPrompt)
             history.forEach { message ->
                 when (message.role) {
-                    ChatRole.USER -> user(message.content)
+                    ChatRole.USER -> user(formatMessageWithAttachments(message.content, message.attachments))
                     ChatRole.ASSISTANT -> assistant(message.content)
                 }
             }

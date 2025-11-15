@@ -48,7 +48,8 @@ internal class ChatTabController(
     private val project: Project,
     private val chatIndex: Int,
     private val messages: MutableMap<Int, MutableList<ChatMessage>>,
-    private val logger: Logger
+    private val logger: Logger,
+    private val onHistoryChanged: () -> Unit = {}
 ) {
 
     private val toolProcessor = ToolCallProcessor()
@@ -58,6 +59,20 @@ internal class ChatTabController(
     private lateinit var planRenderer: PlanRenderer
     private lateinit var toolRenderer: ToolRenderer
     private lateinit var referencePopupProvider: ReferencePopupProvider
+    private fun currentConversation(): MutableList<ChatMessage> =
+        messages.getOrPut(chatIndex) { mutableListOf() }
+
+    private fun recordUserTurn(content: String, attachments: List<ChatAttachment>) {
+        currentConversation().add(ChatMessage(ChatRole.USER, content, attachments))
+        onHistoryChanged()
+    }
+
+    private fun recordAssistantTurn(content: String) {
+        val normalized = content.trim()
+        if (normalized.isEmpty()) return
+        currentConversation().add(ChatMessage(ChatRole.ASSISTANT, normalized))
+        onHistoryChanged()
+    }
 
     fun createPanel(): JComponent {
         messageContainer = JBPanel<JBPanel<*>>(VerticalLayout(JBUI.scale(8))).apply {
@@ -90,12 +105,23 @@ internal class ChatTabController(
         }
 
         val inputBar = createInputBar(popupProvider, sendButton)
+        renderExistingConversation()
 
         return JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(8)
             add(scroll, BorderLayout.CENTER)
             add(inputBar, BorderLayout.SOUTH)
         }
+    }
+
+    private fun renderExistingConversation() {
+        messages[chatIndex].orEmpty().forEach { message ->
+            when (message.role) {
+                ChatRole.USER -> messageContainer.appendUserBubble(message.content, message.attachments, project)
+                ChatRole.ASSISTANT -> messageContainer.appendAssistantBubble(message.content)
+            }
+        }
+        scrollToBottom(scroll)
     }
 
     private fun sendMessage(text: String?) {
@@ -134,6 +160,7 @@ internal class ChatTabController(
     }
 
     private fun sendMessageViaAcp(userMessage: String, attachments: List<ChatAttachment>) {
+        recordUserTurn(userMessage, attachments)
         val accumulatedText = StringBuilder()
         val textBubbleRef = AtomicReference<com.github.egorbaranov.cod3.ui.components.ChatBubble?>()
 
@@ -164,7 +191,9 @@ internal class ChatTabController(
                     handleAcpToolUpdate(event)
                 }
 
-                is AcpStreamEvent.Completed -> appendStreamingAssistant(accumulatedText, textBubbleRef, "")
+                is AcpStreamEvent.Completed -> {
+                    recordAssistantTurn(accumulatedText.toString())
+                }
                 is AcpStreamEvent.Error -> {
                     val errorMessage = event.throwable.message ?: event.throwable.javaClass.simpleName
                     appendStreamingAssistant(accumulatedText, textBubbleRef, "\n\nError: $errorMessage")
@@ -213,8 +242,8 @@ internal class ChatTabController(
     }
 
     private fun sendMessageViaKoogChat(text: String, attachments: List<ChatAttachment>) {
-        val conversation = messages.getOrPut(chatIndex) { mutableListOf() }
-        conversation.add(ChatMessage(ChatRole.USER, text, attachments))
+        val conversation = currentConversation()
+        recordUserTurn(text, attachments)
 
         val accumulatedText = StringBuilder()
         val bubbleRef = AtomicReference<com.github.egorbaranov.cod3.ui.components.ChatBubble?>()
@@ -223,9 +252,7 @@ internal class ChatTabController(
             when (event) {
                 is KoogChatStreamEvent.ContentDelta -> appendStreamingAssistant(accumulatedText, bubbleRef, event.text)
                 is KoogChatStreamEvent.Completed -> {
-                    if (event.response.isNotBlank()) {
-                        conversation.add(ChatMessage(ChatRole.ASSISTANT, event.response))
-                    }
+                    recordAssistantTurn(event.response)
                 }
 
                 is KoogChatStreamEvent.Error -> {
@@ -516,8 +543,8 @@ internal class ChatTabController(
         }
 
         val payload = formatMessageWithAttachments(userMessage, attachments)
-        val conversation = messages.getOrPut(chatIndex) { mutableListOf() }
-        conversation.add(ChatMessage(ChatRole.USER, payload))
+        val conversation = currentConversation()
+        recordUserTurn(userMessage, attachments)
 
         project.koogAgentService().run(chatIndex, payload, conversation, permissionHandler) { event ->
             when (event) {
@@ -530,9 +557,7 @@ internal class ChatTabController(
                     if (accumulatedText.isEmpty()) {
                         appendStreamingAssistant(accumulatedText, bubbleRef, event.response)
                     }
-                    if (event.response.isNotBlank()) {
-                        conversation.add(ChatMessage(ChatRole.ASSISTANT, event.response))
-                    }
+                    recordAssistantTurn(event.response)
                 }
 
                 is KoogStreamEvent.Error -> {

@@ -1,6 +1,5 @@
 package com.github.egorbaranov.cod3.state
 
-import com.github.egorbaranov.cod3.settings.PluginSettingsState
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.State
@@ -10,30 +9,41 @@ import com.intellij.openapi.components.Storage
     name = "ChatState",
     storages = [Storage("chat.xml")]
 )
-class ChatState: PersistentStateComponent<ChatState> {
+class ChatState : PersistentStateComponent<ChatState.State> {
 
-    var chats: List<Chat> = mutableListOf()
+    data class State(
+        var chats: MutableList<Chat> = mutableListOf()
+    )
 
-    override fun getState(): ChatState = this
-    override fun loadState(state: ChatState) {
-        state.copyStateTo(this)
+    private var state = State()
+
+    var chats: MutableList<Chat>
+        get() = state.chats
+        set(value) {
+            state.chats = value
+        }
+
+    override fun getState(): State = state
+
+    override fun loadState(state: State) {
+        this.state = state
     }
-
-    fun copyStateTo(target: ChatState) {
-        target.chats = this.chats
-    }
-
 
     data class Chat(
-        val messages: MutableList<Message>
+        var id: Int = 0,
+        var title: String = "",
+        var messages: MutableList<Message> = mutableListOf()
     ) {
         data class Message(
-            val text: String,
-            val attachments: List<Attachment>
+            var role: String = "USER",
+            var text: String = "",
+            var attachments: List<Attachment> = emptyList()
         )
 
         data class Attachment(
-            val text: String
+            var title: String = "",
+            var content: String = "",
+            var navigationPath: String? = null
         )
     }
 

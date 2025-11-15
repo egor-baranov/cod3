@@ -1,6 +1,9 @@
 package com.github.egorbaranov.cod3.toolWindow
 
+import com.github.egorbaranov.cod3.state.ChatState
 import com.github.egorbaranov.cod3.toolWindow.chat.ChatMessage
+import com.github.egorbaranov.cod3.toolWindow.chat.ChatAttachment
+import com.github.egorbaranov.cod3.toolWindow.chat.ChatRole
 import com.github.egorbaranov.cod3.toolWindow.chat.ChatTabController
 import com.github.egorbaranov.cod3.ui.Icons
 import com.github.egorbaranov.cod3.ui.components.ChatBubble
@@ -46,8 +49,10 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     private val list = JBList(listOf("Files & Folders", "Code", "Docs", "Git", "Web", "Recent Changes"))
     private val logger = Logger.getInstance(Cod3ToolWindowFactory::class.java)
 
+    private val chatState = ChatState.getInstance()
     var chatQuantity = 0
     val messages = mutableMapOf<Int, MutableList<ChatMessage>>()
+    private val chatTitles = mutableMapOf<Int, String>()
     private val chatTabs = mutableMapOf<Int, ChatTabMeta>()
     private lateinit var toolWindowRef: ToolWindow
     private lateinit var projectRef: Project
@@ -80,20 +85,70 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         (toolWindow as? ToolWindowEx)
             ?.setTitleActions(*titleGroup.getChildren(null))
 
-        // Add an initial tab:
-        addChatTab(project, toolWindow)
+        restoreChats(project, toolWindow)
+    }
+
+    private fun restoreChats(project: Project, toolWindow: ToolWindow) {
+        val saved = chatState.chats
+        if (saved.isEmpty()) {
+            addChatTab(project, toolWindow)
+            return
+        }
+
+        chatQuantity = saved.maxOfOrNull { it.id } ?: 0
+        saved.forEach { chat ->
+            val id = if (chat.id > 0) chat.id else ++chatQuantity
+            val title = chat.title.ifBlank { "Chat $id" }
+            chatTitles[id] = title
+            val history = chat.messages.mapNotNull { msg ->
+                runCatching {
+                    val role = ChatRole.valueOf(msg.role)
+                    ChatMessage(
+                        role = role,
+                        content = msg.text,
+                        attachments = msg.attachments.map {
+                            ChatAttachment(it.title, it.content, navigationPath = it.navigationPath)
+                        }
+                    )
+                }.getOrNull()
+            }.toMutableList()
+            messages[id] = history
+        }
+
+        val firstId = chatTitles.keys.minOrNull()
+        if (firstId != null) {
+            createChatTab(firstId, chatTitles[firstId] ?: "Chat $firstId")
+        } else {
+            addChatTab(project, toolWindow)
+        }
     }
 
     private fun addChatTab(project: Project, toolWindow: ToolWindow) {
         val chatId = ++chatQuantity
+        val title = "Chat $chatId"
+        chatTitles[chatId] = title
+        messages.getOrPut(chatId) { mutableListOf() }
+        createChatTab(chatId, title)
+        persistChats()
+    }
 
-        val controller = ChatTabController(project, chatId, messages, logger)
+    private fun createChatTab(chatId: Int, title: String, select: Boolean = true) {
+        if (chatTabs.containsKey(chatId)) {
+            if (select) {
+                toolWindowRef.contentManager.setSelectedContent(chatTabs[chatId]!!.content)
+            }
+            return
+        }
+
+        val controller = ChatTabController(projectRef, chatId, messages, logger) {
+            persistChats()
+        }
         val panel = SimpleToolWindowPanel(true, true).apply {
             setContent(controller.createPanel())
         }
 
         val content: Content = ContentFactory.getInstance()
-            .createContent(panel, "Chat $chatId", /* isLockable= */ false)
+            .createContent(panel, title, /* isLockable= */ false)
             .apply {
                 isCloseable = true
                 setShouldDisposeContent(true)
@@ -103,10 +158,12 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                 }
             }
 
-        chatTabs[chatId] = ChatTabMeta("Chat $chatId", content)
+        chatTabs[chatId] = ChatTabMeta(content)
 
-        toolWindow.contentManager.addContent(content)
-        toolWindow.contentManager.setSelectedContent(content)
+        toolWindowRef.contentManager.addContent(content)
+        if (select) {
+            toolWindowRef.contentManager.setSelectedContent(content)
+        }
         refreshHistoryContent()
     }
 
@@ -140,10 +197,10 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
 
         val scroll = JBScrollPane(messageContainer)
 
-        chatTabs.entries
+        chatTitles.entries
             .sortedBy { it.key }
-            .forEach { (id, meta) ->
-                messageContainer.add(historyBubble(id, meta))
+            .forEach { (id, title) ->
+                messageContainer.add(historyBubble(id, title))
                 messageContainer.add(Box.createVerticalStrut(8))
             }
 
@@ -154,8 +211,8 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         }
     }
 
-    private fun historyBubble(chatId: Int, meta: ChatTabMeta): JComponent {
-        val label = JLabel("<html>${meta.title.replace("\n", "<br>")}</html>").apply {
+    private fun historyBubble(chatId: Int, title: String): JComponent {
+        val label = JLabel("<html>${title.replace("\n", "<br>")}</html>").apply {
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             addMouseListener(object : java.awt.event.MouseAdapter() {
                 override fun mouseClicked(e: java.awt.event.MouseEvent?) {
@@ -171,7 +228,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                     "Enter new name:",
                     "Rename Chat",
                     null,
-                    meta.title,
+                    title,
                     null
                 )?.trim()
                 if (!newName.isNullOrEmpty()) {
@@ -184,7 +241,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
             override fun actionPerformed(e: AnActionEvent) {
                 val result = Messages.showYesNoDialog(
                     projectRef,
-                    "Delete ${meta.title}?",
+                    "Delete ${chatTitles[chatId] ?: title}?",
                     "Confirm Delete",
                     Messages.getYesButton(),
                     Messages.getNoButton(),
@@ -212,7 +269,7 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
                     object : AnAction("Copy Name") {
                         override fun actionPerformed(e: AnActionEvent) {
                             val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
-                            clipboard.setContents(java.awt.datatransfer.StringSelection(meta.title), null)
+                            clipboard.setContents(java.awt.datatransfer.StringSelection(title), null)
                         }
                     }
                 )
@@ -264,22 +321,30 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
     }
 
     private fun openChatTab(chatId: Int) {
-        val meta = chatTabs[chatId] ?: return
-        toolWindowRef.contentManager.setSelectedContent(meta.content)
+        val meta = chatTabs[chatId]
+        if (meta != null) {
+            toolWindowRef.contentManager.setSelectedContent(meta.content)
+        } else {
+            val title = chatTitles[chatId] ?: "Chat $chatId"
+            createChatTab(chatId, title)
+        }
     }
 
     private fun renameChat(chatId: Int, newName: String) {
-        val meta = chatTabs[chatId] ?: return
-        meta.title = newName
-        meta.content.displayName = newName
+        chatTitles[chatId] = newName
+        chatTabs[chatId]?.content?.displayName = newName
         refreshHistoryContent()
+        persistChats()
     }
 
     private fun deleteChat(chatId: Int) {
-        val meta = chatTabs.remove(chatId) ?: return
+        chatTabs.remove(chatId)?.let {
+            toolWindowRef.contentManager.removeContent(it.content, true)
+        }
         messages.remove(chatId)
-        toolWindowRef.contentManager.removeContent(meta.content, true)
+        chatTitles.remove(chatId)
         refreshHistoryContent()
+        persistChats()
     }
 
     private fun refreshHistoryContent() {
@@ -308,5 +373,22 @@ class Cod3ToolWindowFactory : ToolWindowFactory {
         private val HISTORY_TAB_KEY = Key.create<Boolean>("com.github.egorbaranov.cod3.HISTORY_TAB")
     }
 
-    private data class ChatTabMeta(var title: String, val content: Content)
+    private fun persistChats() {
+        val persisted = chatTitles.keys.sorted().map { id ->
+            val title = chatTitles[id] ?: "Chat $id"
+            val items = messages[id].orEmpty().map {
+                ChatState.Chat.Message(
+                    role = it.role.name,
+                    text = it.content,
+                    attachments = it.attachments.map { att ->
+                        ChatState.Chat.Attachment(att.title, att.content, att.navigationPath)
+                    }
+                )
+            }.toMutableList()
+            ChatState.Chat(id = id, title = title, messages = items)
+        }
+        chatState.chats = persisted.toMutableList()
+    }
+
+    private data class ChatTabMeta(val content: Content)
 }
