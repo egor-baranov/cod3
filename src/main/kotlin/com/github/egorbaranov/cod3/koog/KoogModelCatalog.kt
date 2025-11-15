@@ -28,25 +28,25 @@ object KoogModelCatalog {
     val availableModels: List<Entry> = listOf(
         Entry(
             id = OpenAIModels.CostOptimized.GPT4oMini.id,
-            label = "OpenAI GPT-4o Mini (cost-optimized)",
+            label = "GPT-4o Mini (cost-optimized)",
             model = OpenAIModels.CostOptimized.GPT4oMini,
             provider = Provider.OPENAI
         ),
         Entry(
             id = OpenAIModels.Chat.GPT4o.id,
-            label = "OpenAI GPT-4o",
+            label = "GPT-4o",
             model = OpenAIModels.Chat.GPT4o,
             provider = Provider.OPENAI
         ),
         Entry(
             id = OpenAIModels.Chat.GPT4_1.id,
-            label = "OpenAI GPT-4.1",
+            label = "GPT-4.1",
             model = OpenAIModels.Chat.GPT4_1,
             provider = Provider.OPENAI
         ),
         Entry(
             id = OpenAIModels.Chat.GPT5Mini.id,
-            label = "OpenAI GPT-5 Mini",
+            label = "GPT-5 Mini",
             model = OpenAIModels.Chat.GPT5Mini,
             provider = Provider.OPENAI
         ),

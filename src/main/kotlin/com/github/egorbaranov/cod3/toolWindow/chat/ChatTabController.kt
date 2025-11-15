@@ -456,23 +456,28 @@ internal class ChatTabController(
         val future = CompletableFuture<Boolean>()
 
         ApplicationManager.getApplication().invokeLater {
-            val panel = JPanel().apply {
-                layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                isOpaque = false
-                border = JBUI.Borders.empty(10, 0)
+            val panel = object : JPanel() {
+                init {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    isOpaque = false
+                    border = JBUI.Borders.empty(6)
+                    alignmentX = Component.LEFT_ALIGNMENT
+                }
             }
 
             val escapedName = StringUtil.escapeXmlEntities(toolName)
             val statusLabel = JBLabel("<html>Agent requests permission to run <b>$escapedName</b>.</html>").apply {
                 foreground = UIUtil.getLabelForeground()
+                alignmentX = Component.LEFT_ALIGNMENT
             }
             panel.add(statusLabel)
 
             args?.takeIf { it.isNotEmpty() }?.let { arguments ->
                 val argHtml = formatArgumentsHtml(arguments)
                 val argLabel = JBLabel("<html>$argHtml</html>").apply {
-                    border = JBUI.Borders.emptyTop(6)
+                    border = JBUI.Borders.emptyTop(4)
                     foreground = UIUtil.getLabelInfoForeground()
+                    alignmentX = Component.LEFT_ALIGNMENT
                 }
                 panel.add(argLabel)
             }
@@ -488,15 +493,42 @@ internal class ChatTabController(
                 isOpaque = false
                 putClientProperty("JButton.backgroundColor", background)
             }
-            val buttonsRow = JPanel(FlowLayout(FlowLayout.RIGHT, JBUI.scale(8), 0)).apply {
+            val buttonsRow = JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
                 isOpaque = false
                 add(approveButton)
+                add(Box.createHorizontalStrut(6))
                 add(declineButton)
             }
             buttonPanel.add(buttonsRow, BorderLayout.SOUTH)
+            buttonPanel.alignmentX = Component.LEFT_ALIGNMENT
             panel.add(buttonPanel)
 
-            messageContainer.addChatBubble(panel)
+            val bubble = object : JPanel(BorderLayout()) {
+                init {
+                    isOpaque = false
+                    border = JBUI.Borders.empty(6,6,0,0)
+                    add(panel, BorderLayout.CENTER)
+                    alignmentX = Component.LEFT_ALIGNMENT
+                }
+
+                override fun paintComponent(g: Graphics) {
+                    val g2 = g.create() as Graphics2D
+                    try {
+                        g2.color = JBColor(0xEBF0FF, 0x353944)
+                        g2.setRenderingHint(
+                            RenderingHints.KEY_ANTIALIASING,
+                            RenderingHints.VALUE_ANTIALIAS_ON
+                        )
+                        g2.fillRoundRect(0, 0, width, height, 24, 24)
+                    } finally {
+                        g2.dispose()
+                    }
+                    super.paintComponent(g)
+                }
+            }
+
+            messageContainer.add(bubble)
+            refreshPanel(messageContainer)
             scrollToBottom(scroll)
 
             fun complete(approved: Boolean) {
