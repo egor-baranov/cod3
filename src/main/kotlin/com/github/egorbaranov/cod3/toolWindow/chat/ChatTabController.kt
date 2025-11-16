@@ -10,6 +10,7 @@ import com.github.egorbaranov.cod3.ui.components.ReferencePopupProvider
 import com.github.egorbaranov.cod3.ui.components.ScrollableSpacedPanel
 import com.github.egorbaranov.cod3.ui.components.createModelComboBox
 import com.github.egorbaranov.cod3.ui.createResizableEditor
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -44,6 +45,7 @@ import java.awt.geom.RoundRectangle2D
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.*
+import kotlinx.coroutines.Job
 
 internal class ChatTabController(
     private val project: Project,
@@ -60,6 +62,14 @@ internal class ChatTabController(
     private lateinit var planRenderer: PlanRenderer
     private lateinit var toolRenderer: ToolRenderer
     private lateinit var referencePopupProvider: ReferencePopupProvider
+    private lateinit var sendButton: IconLabelButton
+    private lateinit var stopButton: IconLabelButton
+    private lateinit var actionButtonPanel: JPanel
+    private lateinit var actionButtonLayout: CardLayout
+    private var activeJob: Job? = null
+    private var thinkingBubble: com.github.egorbaranov.cod3.ui.components.ChatBubble? = null
+    private var thinkingTimer: Timer? = null
+    private var thinkingDots = 0
     private fun currentConversation(): MutableList<ChatMessage> =
         messages.getOrPut(chatIndex) { mutableListOf() }
 
@@ -99,13 +109,25 @@ internal class ChatTabController(
         popupProvider = ReferencePopupProvider(editorTextField, contextPanel)
         referencePopupProvider = popupProvider
 
-        val sendButton = IconLabelButton(Icons.Send) { sendMessage(popupProvider.editorTextField.text.trim()) }.apply {
+        sendButton = IconLabelButton(Icons.Send) { sendMessage(popupProvider.editorTextField.text.trim()) }.apply {
             minimumSize = Dimension(24, 24)
             preferredSize = Dimension(24, 24)
             cursor = Cursor(Cursor.HAND_CURSOR)
         }
+        stopButton = IconLabelButton(AllIcons.Actions.Suspend) { interruptGeneration() }.apply {
+            minimumSize = Dimension(24, 24)
+            preferredSize = Dimension(24, 24)
+            cursor = Cursor(Cursor.HAND_CURSOR)
+        }
+        actionButtonLayout = CardLayout()
+        actionButtonPanel = JPanel(actionButtonLayout).apply {
+            isOpaque = false
+            add(sendButton, "send")
+            add(stopButton, "stop")
+            actionButtonLayout.show(this, "send")
+        }
 
-        val inputBar = createInputBar(popupProvider, sendButton)
+        val inputBar = createInputBar(popupProvider, actionButtonPanel)
         renderExistingConversation()
 
         return JPanel(BorderLayout()).apply {
@@ -127,6 +149,7 @@ internal class ChatTabController(
 
     private fun sendMessage(text: String?) {
         val trimmed = text?.trim().orEmpty()
+        if (activeJob?.isActive == true) return
         val hasAttachments = referencePopupProvider.hasAttachments()
         if (trimmed.isEmpty() && !hasAttachments) return
 
@@ -178,7 +201,7 @@ internal class ChatTabController(
 
         val service = project.service<AcpClientService>()
 
-        service.sendPrompt(formatMessageWithAttachments(userMessage, attachments)) { event ->
+        val job = service.sendPrompt(formatMessageWithAttachments(userMessage, attachments)) { event ->
             when (event) {
                 is AcpStreamEvent.AgentContentText -> appendStreamingAssistant(
                     accumulatedText,
@@ -200,11 +223,14 @@ internal class ChatTabController(
                     recordAssistantTurn(accumulatedText.toString())
                 }
                 is AcpStreamEvent.Error -> {
-                    val errorMessage = event.throwable.message ?: event.throwable.javaClass.simpleName
-                    appendStreamingAssistant(accumulatedText, textBubbleRef, "\n\nError: $errorMessage")
+                    val errorMessage = event.throwable.message?.takeIf { !it.contains("StandaloneCoroutine was cancelled") }
+                        ?: "Conversation paused"
+                    val prefix = if (errorMessage == "Conversation paused") "" else "Error: "
+                    appendStreamingAssistant(accumulatedText, textBubbleRef, "\n\n$prefix$errorMessage")
                 }
             }
         }
+        beginStreaming(job)
     }
 
     private fun appendStreamingAssistant(
@@ -213,6 +239,7 @@ internal class ChatTabController(
         chunk: String
     ) {
         if (chunk.isEmpty()) return
+        stopThinkingIndicator()
         accumulator.append(chunk)
         val updated = accumulator.toString()
         SwingUtilities.invokeLater {
@@ -253,7 +280,7 @@ internal class ChatTabController(
         val accumulatedText = StringBuilder()
         val bubbleRef = AtomicReference<com.github.egorbaranov.cod3.ui.components.ChatBubble?>()
 
-        project.koogChatService().stream(conversation.toList()) { event ->
+        val job = project.koogChatService().stream(conversation.toList()) { event ->
             when (event) {
                 is KoogChatStreamEvent.ContentDelta -> appendStreamingAssistant(accumulatedText, bubbleRef, event.text)
                 is KoogChatStreamEvent.Completed -> {
@@ -261,16 +288,19 @@ internal class ChatTabController(
                 }
 
                 is KoogChatStreamEvent.Error -> {
-                    val errorMessage = event.throwable.message ?: event.throwable.javaClass.simpleName
-                    appendStreamingAssistant(accumulatedText, bubbleRef, "\n\nError: $errorMessage")
+                    val errorMessage = event.throwable.message?.takeIf { !it.contains("StandaloneCoroutine was cancelled") }
+                        ?: "Conversation paused"
+                    val prefix = if (errorMessage == "Conversation paused") "" else "Error: "
+                    appendStreamingAssistant(accumulatedText, bubbleRef, "\n\n$prefix$errorMessage")
                 }
             }
         }
+        beginStreaming(job)
     }
 
     private fun createInputBar(
         referencePopupProvider: ReferencePopupProvider,
-        sendButton: IconLabelButton
+        actionButton: JComponent
     ): JPanel = object : JPanel(BorderLayout()) {
         init {
             isOpaque = false
@@ -332,7 +362,7 @@ internal class ChatTabController(
             row {
                 cell(createModelComboBox())
                 cell(createAgentModeDropdown())
-                cell(sendButton).align(AlignX.RIGHT)
+                cell(actionButton).align(AlignX.RIGHT)
             }
         }.andTransparent().withBorder(JBUI.Borders.empty(0, 4))
 
@@ -587,7 +617,7 @@ internal class ChatTabController(
         val conversation = currentConversation()
         recordUserTurn(userMessage, attachments)
 
-        project.koogAgentService().run(chatIndex, payload, conversation, permissionHandler) { event ->
+        val job = project.koogAgentService().run(chatIndex, payload, conversation, permissionHandler) { event ->
             when (event) {
                 is KoogStreamEvent.ContentDelta -> appendStreamingAssistant(accumulatedText, bubbleRef, event.text)
                 is KoogStreamEvent.ToolCallUpdate -> {
@@ -612,10 +642,75 @@ internal class ChatTabController(
                 }
 
                 is KoogStreamEvent.Error -> {
-                    val errorMessage = event.throwable.message ?: event.throwable.javaClass.simpleName
-                    appendStreamingAssistant(accumulatedText, bubbleRef, "\n\nError: $errorMessage")
+                    val errorMessage = event.throwable.message?.takeIf { !it.contains("StandaloneCoroutine was cancelled") }
+                        ?: "Conversation paused"
+                    val prefix = if (errorMessage == "Conversation paused") "" else "Error: "
+                    appendStreamingAssistant(accumulatedText, bubbleRef, "\n\n$prefix$errorMessage")
                 }
             }
+        }
+        beginStreaming(job)
+    }
+
+    private fun beginStreaming(job: Job) {
+        activeJob?.cancel()
+        activeJob = job
+        showStopButton()
+        startThinkingIndicator()
+        job.invokeOnCompletion {
+            SwingUtilities.invokeLater {
+                if (activeJob == job) {
+                    activeJob = null
+                    stopThinkingIndicator()
+                    showSendButton()
+                }
+            }
+        }
+    }
+
+    private fun showSendButton() {
+        SwingUtilities.invokeLater {
+            actionButtonLayout.show(actionButtonPanel, "send")
+        }
+    }
+
+    private fun showStopButton() {
+        SwingUtilities.invokeLater {
+            actionButtonLayout.show(actionButtonPanel, "stop")
+        }
+    }
+
+    private fun interruptGeneration() {
+        activeJob?.cancel()
+    }
+
+    private fun startThinkingIndicator() {
+        SwingUtilities.invokeLater {
+            if (thinkingBubble != null) return@invokeLater
+            thinkingDots = 1
+            val bubble = messageContainer.appendAssistantBubble("Thinking.")
+            thinkingBubble = bubble
+            thinkingTimer?.stop()
+            thinkingTimer = Timer(500) {
+                thinkingDots = (thinkingDots % 3) + 1
+                SwingUtilities.invokeLater {
+                    thinkingBubble?.updateText("Thinking" + ".".repeat(thinkingDots), forceReplace = true)
+                }
+            }.apply { start() }
+            scrollToBottom(scroll)
+        }
+    }
+
+    private fun stopThinkingIndicator() {
+        SwingUtilities.invokeLater {
+            thinkingTimer?.stop()
+            thinkingTimer = null
+            thinkingDots = 0
+            thinkingBubble?.let {
+                messageContainer.remove(it)
+                refreshPanel(messageContainer)
+            }
+            thinkingBubble = null
         }
     }
 }
